@@ -30,7 +30,7 @@ def _seed(text: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     """Assemble the argument parser."""
     parser = argparse.ArgumentParser(
-        prog="sbci", description="Continuous brain connectivity toolkit"
+        prog="sbci", description="SBCI Toolbox: continuous brain connectivity"
     )
     parser.add_argument("--version", action="version", version=f"sbci {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)

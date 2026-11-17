@@ -1,4 +1,4 @@
-# SBCI Python package — implementation blueprint
+# SBCI Toolbox — implementation blueprint
 
 **Work package 2 of the Usability Implementation Brief.** A plan for the `sbci`
 Python package: what it is, what "finished" means, what exists today, what
@@ -101,7 +101,7 @@ checks it end to end.
 
 **Every line works on the released subject but the first.** `pip install
 sbci` waits on publishing to PyPI; until then `pip install
-git+https://github.com/xya2001/SBCI.git` stands in for it.
+git+https://github.com/xya2001/SBCI_Toolbox.git` stands in for it.
 
 ## 3. Architecture
 
@@ -415,7 +415,7 @@ the reference pipeline is internally inconsistent between its smoothing and its
 parcellation.
 
 **Q7. Who holds the copyright?**
-The licence file currently says "The SBCI developers". It needs the
+The licence file currently says "The SBCI Toolbox developers". It needs the
 institutional holder before the first tagged release.
 
 ### Tier 3 — no decision needed; engineering work, already scoped

@@ -12,7 +12,7 @@ docs/RESULTS.md gives.
 ## Setup anywhere
 
 ```bash
-pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI.git"
+pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI_Toolbox.git"
 sbci download hcp-ya --subject 100307 --out hcp-ya   # one real subject's SC and FC, 90 MB, into ./hcp-ya
 ```
 
@@ -1280,7 +1280,7 @@ Both alignments run on a CUDA GPU when asked. Everything else in the package
 runs on the CPU, and so do they by default.
 
 ```bash
-pip install "sbci[gpu] @ git+https://github.com/xya2001/SBCI.git"   # + CuPy for CUDA 12
+pip install "sbci[gpu] @ git+https://github.com/xya2001/SBCI_Toolbox.git"   # + CuPy for CUDA 12
 ```
 
 Another version of CUDA takes its own CuPy package (CuPy's installation guide

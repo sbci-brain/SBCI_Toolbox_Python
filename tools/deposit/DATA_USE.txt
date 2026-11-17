@@ -4,7 +4,7 @@ Continuous connectomes of $subjects HCP Young Adult subjects: terms of use
 These files are structural and functional continuous connectomes on the fsaverage
 ico4 grid (5,124 vertices). They were derived from data of the WU-Minn Human
 Connectome Project (HCP Young Adult, 1200 Subjects release) with the tools of the
-sbci Python package (https://github.com/xya2001/SBCI); PROCESSING.md says how.
+sbci Python package (https://github.com/xya2001/SBCI_Toolbox); PROCESSING.md says how.
 
 They are redistributed under the WU-Minn HCP Consortium Open Access Data Use
 Terms, which apply to anyone who downloads them:

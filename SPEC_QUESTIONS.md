@@ -156,7 +156,7 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    (`--accept-terms` in a script); Google Drive is no longer read. PORTING.md
    item 30 records the release and its checks.
 
-7. **License holder.** `LICENSE` says "The SBCI developers". Replace with the
+7. **License holder.** `LICENSE` says "The SBCI Toolbox developers". Replace with the
    institutional holder before the first tagged release.
 
 8. ~~**The format carries no endpoints.**~~ **DECIDED: in the same file, as

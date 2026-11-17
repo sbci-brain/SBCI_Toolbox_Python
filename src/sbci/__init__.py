@@ -1,8 +1,8 @@
-"""sbci -- continuous brain connectivity.
+"""SBCI Toolbox (``sbci``) -- continuous brain connectivity.
 
 Try it with nothing but the package installed::
 
-    pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI.git"
+    pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI_Toolbox.git"
 
     import sbci
 
