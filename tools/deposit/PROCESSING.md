@@ -2,7 +2,7 @@
 
 The subjects are the $subjects young adults of the HCP 1200 Subjects release with the Zhang
 lab's SBCI pipeline output. Every file was built by a tool of the
-[sbci](https://github.com/xya2001/SBCI_Toolbox) repository, which also validates the files it
+[sbci](https://github.com/xya2001/SBCI_Python_Toolbox) repository, which also validates the files it
 writes. $validated Each file's `metadata` records how it was made, and its `provenance`
 names its subject.
 

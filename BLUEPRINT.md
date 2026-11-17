@@ -101,7 +101,7 @@ checks it end to end.
 
 **Every line works on the released subject but the first.** `pip install
 sbci` waits on publishing to PyPI; until then `pip install
-git+https://github.com/xya2001/SBCI_Toolbox.git` stands in for it.
+git+https://github.com/xya2001/SBCI_Python_Toolbox.git` stands in for it.
 
 ## 3. Architecture
 

@@ -1,6 +1,6 @@
 # SBCI Toolbox
 
-[![tests](https://github.com/xya2001/SBCI_Toolbox/actions/workflows/tests.yml/badge.svg)](https://github.com/xya2001/SBCI_Toolbox/actions/workflows/tests.yml)
+[![tests](https://github.com/xya2001/SBCI_Python_Toolbox/actions/workflows/tests.yml/badge.svg)](https://github.com/xya2001/SBCI_Python_Toolbox/actions/workflows/tests.yml)
 
 Continuous brain connectivity in Python: read, parcellate, smooth, couple,
 align and reduce surface-based connectomes on the ico4 grid, with every method
@@ -23,10 +23,10 @@ published on UNC Dataverse, any of them one command away.
 Python 3.10 or newer. The package is not on PyPI yet, so install from GitHub:
 
 ```bash
-pip install "sbci @ git+https://github.com/xya2001/SBCI_Toolbox.git"             # core: numpy, scipy, h5py, nibabel
-pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI_Toolbox.git"   # + matplotlib and nilearn, for figures
-pip install "sbci[render] @ git+https://github.com/xya2001/SBCI_Toolbox.git"     # + PyVista, for the smoothly lit figures
-pip install "sbci[gpu] @ git+https://github.com/xya2001/SBCI_Toolbox.git"        # + CuPy, to align on a CUDA GPU
+pip install "sbci @ git+https://github.com/xya2001/SBCI_Python_Toolbox.git"             # core: numpy, scipy, h5py, nibabel
+pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI_Python_Toolbox.git"   # + matplotlib and nilearn, for figures
+pip install "sbci[render] @ git+https://github.com/xya2001/SBCI_Python_Toolbox.git"     # + PyVista, for the smoothly lit figures
+pip install "sbci[gpu] @ git+https://github.com/xya2001/SBCI_Python_Toolbox.git"        # + CuPy, to align on a CUDA GPU
 ```
 
 On UNC's Longleaf cluster, `scripts/setup_longleaf.sh` builds the environment
@@ -142,7 +142,7 @@ output (USAGE.md, *Getting the data* and *Using legacy pipeline output*).
 ## Development
 
 ```bash
-git clone https://github.com/xya2001/SBCI_Toolbox.git && cd SBCI_Toolbox
+git clone https://github.com/xya2001/SBCI_Python_Toolbox.git && cd SBCI_Python_Toolbox
 pip install -e ".[dev]"
 pytest                                   # about ten minutes on eight cores; 74 skip (below)
 ruff check src tests scripts tools && ruff format --check src tests scripts tools

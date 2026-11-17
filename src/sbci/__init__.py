@@ -2,7 +2,7 @@
 
 Try it with nothing but the package installed::
 
-    pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI_Toolbox.git"
+    pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI_Python_Toolbox.git"
 
     import sbci
 

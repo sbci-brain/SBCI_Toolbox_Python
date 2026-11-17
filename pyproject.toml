@@ -50,9 +50,9 @@ notebooks = ["sbci[render]", "scikit-learn>=1.3", "bctpy>=0.6", "jupyter"]
 sbci = "sbci.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/xya2001/SBCI_Toolbox"
-Documentation = "https://github.com/xya2001/SBCI_Toolbox/blob/main/USAGE.md"
-Issues = "https://github.com/xya2001/SBCI_Toolbox/issues"
+Homepage = "https://github.com/xya2001/SBCI_Python_Toolbox"
+Documentation = "https://github.com/xya2001/SBCI_Python_Toolbox/blob/main/USAGE.md"
+Issues = "https://github.com/xya2001/SBCI_Python_Toolbox/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sbci"]

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Walk the whole build, printing what each stage actually produces.
 #
-#   SBCI_VENV=path/to/venv SBCI_CHECKOUT=path/to/SBCI_Toolbox bash scripts/show_build.sh
+#   SBCI_VENV=path/to/venv SBCI_CHECKOUT=path/to/SBCI_Python_Toolbox bash scripts/show_build.sh
 #
 # The two default to the lab's environment and checkout on Longleaf; Lmod's
 # python module is loaded only where Lmod is installed.

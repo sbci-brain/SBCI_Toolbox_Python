@@ -975,7 +975,7 @@ def test_subjects_csv_must_list_the_subjects_whose_files_go_up(built):
 
 def test_the_readme_installs_the_commit_prepare_ran_from(built):
     out = prepare(built)
-    assert f"SBCI_Toolbox.git@{COMMIT_ID}" in (out / "README.md").read_text()
+    assert f"SBCI_Python_Toolbox.git@{COMMIT_ID}" in (out / "README.md").read_text()
     assert f"the code at {COMMIT_ID}" in (out / "CHECKS.txt").read_text()
 
 
@@ -990,7 +990,7 @@ def test_without_a_commit_prepare_refuses_before_it_changes_anything(built, monk
     with pytest.raises(SystemExit, match="is not a commit"):
         prepare(built, "--ref", "main")
     prepare(built, "--ref", "f" * 40)
-    assert f"SBCI_Toolbox.git@{'f' * 40}" in (out / "README.md").read_text()
+    assert f"SBCI_Python_Toolbox.git@{'f' * 40}" in (out / "README.md").read_text()
 
 
 @pytest.mark.parametrize("where", ["a plain folder", "another repository"])
