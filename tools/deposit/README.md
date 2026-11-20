@@ -46,11 +46,11 @@ Downloading them means accepting those terms. Among them:
 ## Reading the files
 
 The files are in version $spec_version of the format of the
-[sbci](https://github.com/xya2001/SBCI_Python_Toolbox) Python package, whose code at the commit below
+[sbci](https://github.com/sbci-brain/SBCI_Toolbox_Python) Python package, whose code at the commit below
 reads them, once extracted:
 
 ```python
-# pip install "sbci @ git+https://github.com/xya2001/SBCI_Python_Toolbox.git@$sbci_ref"
+# pip install "sbci @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git@$sbci_ref"
 import sbci
 
 sc = sbci.load("sc/sub-100307_sc.h5")  # with the endpoints of its streamlines

@@ -36,7 +36,7 @@ trusting the summary.
 ## Tier 1 — anyone, in five minutes
 
 ```bash
-git clone https://github.com/xya2001/SBCI_Python_Toolbox.git && cd SBCI_Python_Toolbox
+git clone https://github.com/sbci-brain/SBCI_Toolbox_Python.git && cd SBCI_Toolbox_Python
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 

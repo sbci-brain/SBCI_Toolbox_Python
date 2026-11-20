@@ -11,7 +11,7 @@ bctpy for the cohort notebook's graph measures, whose cells it skips without,
 and jupyter:
 
 ```bash
-pip install "sbci[notebooks] @ git+https://github.com/xya2001/SBCI_Python_Toolbox.git"
+pip install "sbci[notebooks] @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"
 mkdir -p ~/sbci-run && cp notebooks/01_explore.ipynb ~/sbci-run/ && cd ~/sbci-run
 jupyter nbconvert --to notebook --execute --inplace 01_explore.ipynb
 ```
