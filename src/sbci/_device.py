@@ -2,9 +2,9 @@
 
 ``align(..., device="gpu")`` and ``endpoints_align(..., device="gpu")`` keep their large arrays
 -- the densities over pairs of vertices, and ConSEAL's streamline endpoints -- on the GPU, and
-the per-vertex geometry of the warps on the CPU, where it is small. CuPy is optional (``pip
-install 'sbci[gpu]'``); without it, or with no GPU visible, ``device="gpu"`` is refused with what
-is missing. Each step agrees with the CPU's to rounding, since the GPU adds in another order,
+the per-vertex geometry of the warps on the CPU, where it is small. CuPy is optional, the ``gpu``
+extra; without it, or with no GPU visible, ``device="gpu"`` is refused with what is missing and
+how to install it. Each step agrees with the CPU's to rounding, since the GPU adds in another order,
 and the endpoints' relocation bit for bit (both add a point's corners in one stated order); a
 whole registration agrees as closely as the CPU's own does when an input moves by one unit in
 the last place, and two runs on the GPU give the same bits (PORTING.md items 26 and 27). The
@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._extras import install_hint
+
 DEVICES = ("cpu", "gpu")
 
 _MISSING = (
-    "device='gpu' needs CuPy built for your CUDA version, and a CUDA GPU. Install it with:\n"
-    "    pip install 'sbci[gpu]'          # CuPy for CUDA 12\n"
+    "device='gpu' needs CuPy built for your CUDA version, and a CUDA GPU. Install it, CuPy for "
+    f"CUDA 12, with:\n{install_hint('gpu')}\n"
     "or pick the CuPy package for your CUDA from https://docs.cupy.dev/en/stable/install.html"
 )
 

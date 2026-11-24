@@ -2532,7 +2532,7 @@ def endpoints_align(
         ``(lh_grid, rh_grid)`` to work on; defaults to :func:`default_grids`.
     device
         ``"cpu"``, the default, or ``"gpu"``: hold the densities and the
-        endpoints on a CUDA GPU through CuPy, ``pip install 'sbci[gpu]'``
+        endpoints on a CUDA GPU through CuPy, the ``gpu`` extra
         (:class:`ConSEAL`). The result is the same object on the CPU, and agrees
         with the CPU's as :class:`ConSEAL` says.
 

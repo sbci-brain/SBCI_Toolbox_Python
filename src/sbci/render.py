@@ -5,8 +5,11 @@ same surfaces through PyVista (VTK) off-screen -- per-vertex normals, a
 three-point light kit, Phong shading with a specular highlight, supersampled
 anti-aliasing -- and hands the views back as images, so :func:`plot_surface`
 can lay them out with the same titles and colorbar as before. It is the
-optional ``render`` extra (``pip install sbci[render]``); on a machine without
-a display VTK 9.4 or later renders in software by itself.
+optional ``render`` extra; on a machine without a display VTK 9.4 or later
+renders in software by itself::
+
+    pip install "sbci[render] @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"
+    pip install -e ".[render]"          # in a checkout of the repository
 
 The map is coloured as in the matplotlib path: the surface is shaded by
 sulcal depth, the map's colours are laid over it and darkened in the sulci,
@@ -20,6 +23,8 @@ import os
 import sys
 
 import numpy as np
+
+from ._extras import install_hint
 
 #: Pixels rendered per view, before it is placed in the figure.
 WINDOW = (1400, 1050)
@@ -47,7 +52,8 @@ _SOFTWARE_BUILD = (
     "pip install --extra-index-url https://wheels.vtk.org vtk-osmesa"
 )
 _MISSING = (
-    f"rendering needs the render extra: pip install 'sbci[render]' (PyVista); {_SOFTWARE_BUILD}"
+    "rendering needs the render extra (PyVista). Install it with:\n"
+    f"{install_hint('render')}\n{_SOFTWARE_BUILD}"
 )
 _NO_DISPLAY = (
     "this VTK draws through an X display and there is none (DISPLAY is unset), so it would "

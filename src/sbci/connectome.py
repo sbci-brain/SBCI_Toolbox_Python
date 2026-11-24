@@ -419,8 +419,8 @@ class ContinuousConnectome:
     def plot(self, values: np.ndarray, surface: str = "inflated", **kwargs):
         """Render a per-vertex map on a cortical surface.
 
-        Returns the matplotlib figure. Needs the plotting extra:
-        ``pip install 'sbci[plotting]'``.
+        Returns the matplotlib figure. Needs the plotting extra; without it the
+        ImportError gives the command that installs it.
 
         Parameters
         ----------

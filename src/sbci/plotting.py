@@ -4,7 +4,8 @@ Plotting dependencies are optional on purpose: a cluster node running the
 pipeline should not need a rendering stack, so ``nilearn`` and ``matplotlib``
 are extras and the imports happen inside the call.
 
-    pip install 'sbci[plotting]'
+    pip install "sbci[plotting] @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"
+    pip install -e ".[plotting]"        # in a checkout of the repository
 
 The standard neuroimaging view of a whole-brain map is four panels -- each
 hemisphere seen laterally and medially -- and that is what
@@ -25,6 +26,7 @@ from functools import lru_cache
 import numpy as np
 
 from . import spec
+from ._extras import install_hint
 from .atlas import cortex_mask
 from .surface import GEOMETRIES, load_surface, sulcal_depth
 
@@ -46,8 +48,8 @@ VIEWS = ("lateral", "medial", "dorsal", "ventral", "anterior", "posterior")
 #: turned. A rotation, not a reflection, so face winding and normals are unchanged.
 SPHERE_TO_ANATOMICAL = np.array([-1.0, -1.0, 1.0])
 
-_MISSING = (
-    "Plotting needs the optional dependencies. Install them with:\n    pip install 'sbci[plotting]'"
+_MISSING = "Plotting needs the optional dependencies. Install them with:\n" + install_hint(
+    "plotting"
 )
 
 

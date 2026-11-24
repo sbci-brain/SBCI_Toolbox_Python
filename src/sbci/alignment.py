@@ -1879,7 +1879,7 @@ def align(
         reproduces that.
     device
         ``"cpu"``, the default, or ``"gpu"``: hold and transport the densities
-        on a CUDA GPU through CuPy, ``pip install 'sbci[gpu]'`` (:class:`Encore`).
+        on a CUDA GPU through CuPy, the ``gpu`` extra (:class:`Encore`).
         The result is the same object on the CPU. Its template agrees with the
         CPU's to rounding, and each registration as closely as the CPU's own
         does when an input moves by one unit in the last place (PORTING.md item

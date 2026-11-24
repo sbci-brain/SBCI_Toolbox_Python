@@ -77,7 +77,7 @@ def test_the_gpu_without_cupy_is_refused_with_how_to_install_it(monkeypatch):
         lambda: align([density, density], grids=(grid, grid), device="gpu"),
         lambda: endpoints_align([], device="gpu"),
     ):
-        with pytest.raises(ImportError, match=r"pip install 'sbci\[gpu\]'"):
+        with pytest.raises(ImportError, match=r"sbci\[gpu\] @ git\+https://github\.com/"):
             attempt()
 
 

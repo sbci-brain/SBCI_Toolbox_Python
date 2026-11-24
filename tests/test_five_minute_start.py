@@ -1,8 +1,9 @@
 """The acceptance test from the brief, run against a real subject.
 
-The brief's lines, as written:
+The brief's lines, as written but for the install line, which installs from the
+repository since the package is not on PyPI:
 
-    pip install sbci
+    pip install "sbci @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"
     sbci download hcp-ya --subject 100307
 
     from sbci import ContinuousConnectome, load_atlas
