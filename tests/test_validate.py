@@ -656,7 +656,10 @@ def _rewrite_example(example_files, modality, tmp_path, name, **parts):
 
 def test_a_file_of_the_released_version_reads_after_a_freeze(example_files, tmp_path, monkeypatch):
     """With SPEC_VERSION frozen at 0.1.0, files written as 0.1.0-draft still load and validate."""
+    import json
     import shutil
+
+    import h5py
 
     import sbci
     from sbci import spec
@@ -665,7 +668,11 @@ def test_a_file_of_the_released_version_reads_after_a_freeze(example_files, tmp_
     folder = tmp_path / "cohort"
     folder.mkdir()
     shutil.copy(example_files["sc"], folder / "sub-synth01_sc.h5")
-    assert sbci.load(folder / "sub-synth01_sc.h5").metadata["spec_version"] == "0.1.0-draft"
+    with h5py.File(folder / "sub-synth01_sc.h5", "r+") as handle:  # the deposit's version
+        metadata = json.loads(handle["metadata"][()])
+        metadata["spec_version"] = "0.1.0-draft"
+        del handle["metadata"]
+        handle["metadata"] = json.dumps(metadata)
     for frozen in ("0.1.0", "0.1.3"):
         monkeypatch.setattr(spec, "SPEC_VERSION", frozen)
         sbci.load(folder / "sub-synth01_sc.h5")
