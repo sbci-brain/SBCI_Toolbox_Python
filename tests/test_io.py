@@ -193,7 +193,7 @@ def test_functional_connectomes_have_no_streamlines(tmp_path, connectome, endpoi
     """FC carries correlations, so endpoints on one would be meaningless."""
     fc_metadata = template(
         "fc",
-        normalization="unit-mass",
+        normalization="none",
         registration_reference="fsaverage",
         pipeline_version="0.0.1.dev0",
         container_version="sbci.sif@sha256:0",
