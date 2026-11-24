@@ -72,6 +72,7 @@ def test_good_files_pass_and_the_page_says_no_limits_are_installed(files, tmp_pa
         assert name in page and any(c["name"] == name and c["passed"] for c in result["checks"])
     for measure in quality.MEASURES:
         assert measure in page
+    assert "<h2>Files</h2>" in page and "synthetic example" in page  # each file's own record
     try:
         import matplotlib  # noqa: F401
         import nilearn  # noqa: F401

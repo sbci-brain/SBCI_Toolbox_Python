@@ -63,6 +63,24 @@ MEASURES: dict[str, str] = {
 }
 """What ``sbci qc`` measures, and ``tools/build_qc_reference.py`` takes limits for, alike."""
 
+FILE_FIELDS = (
+    "streamline_count",
+    "streamline_weighting",
+    "kernel",
+    "bandwidth",
+    "endpoint_source",
+    "fc_frames",
+    "fc_runs",
+    "fc_nuisance_model",
+    "normalization",
+    "conversion",
+    "entry_point",
+    "pipeline_version",
+    "container_version",
+    "provenance",
+)
+"""The metadata the page shows of each file; ``conversion``, the shares ``sbci convert`` removed."""
+
 LIMITS_FORMAT = "sbci-qc-limits"
 LIMITS_ENVIRONMENT = "SBCI_QC_LIMITS"
 LIMITS_RESOURCE = "qc_limits.json"
@@ -326,6 +344,7 @@ class Result:
     figure_note: str = ""
     run: dict[str, Any] = field(default_factory=dict)
     file_versions: dict[str, Any] = field(default_factory=dict)
+    file_info: dict[str, dict[str, Any]] = field(default_factory=dict)
     started: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S %z"))
 
     def check(self, name: str, passed: bool, detail: str = "") -> bool:
@@ -442,6 +461,10 @@ def _assess(result: Result, run_dir, figures: bool) -> None:
             key: connectome.metadata.get(key)
             for key in ("pipeline_version", "container_version", "spec_version")
         }
+        fields = connectome.metadata.fields
+        result.file_info[modality] = {key: fields[key] for key in FILE_FIELDS if key in fields}
+        if connectome.endpoints is not None:
+            result.file_info[modality]["endpoints stored"] = connectome.endpoints.n_streamlines
         loaded[modality] = connectome
 
     names = {m: parse_name(Path(p).name) for m, p in (("sc", result.sc), ("fc", result.fc)) if p}
@@ -735,6 +758,7 @@ def render(result: Result) -> str:
         f'<p class="verdict {status}">{_e(words[status])}</p>',
         f"<ul>{files}</ul>",
         limits,
+        _files_section(result.file_info),
         "<h2>Checks</h2>",
         _checks_table(result.checks),
         "<h2>Measures</h2>",
@@ -761,6 +785,20 @@ def render(result: Result) -> str:
         f"started {_e(result.started)}.</p></body></html>"
     )
     return "\n".join(parts)
+
+
+def _files_section(info: dict[str, dict[str, Any]]) -> str:
+    """What each file says of itself: how it was made, and what its conversion removed."""
+    if not info:
+        return ""
+    parts = ["<h2>Files</h2>"]
+    for modality, fields in info.items():
+        rows = "".join(
+            f"<tr><th>{_e(key)}</th><td><code>{_e(_text(value))}</code></td></tr>"
+            for key, value in fields.items()
+        )
+        parts.append(f"<h3>{_e(modality.upper())}</h3><table>{rows}</table>")
+    return "".join(parts)
 
 
 def _checks_table(checks: list[dict[str, Any]]) -> str:
