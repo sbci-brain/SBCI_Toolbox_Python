@@ -45,10 +45,13 @@ def test_diffusion_kernel_matches_its_closed_form(basis):
 
 
 def test_matern_kernel_matches_its_closed_form(basis):
+    """The reference's weights, divided by the largest: the scale cancels in the smoothing."""
     eigenvalues, u = basis
     kappa, nu = 1.3, 2.0
     rho = (2 * nu / kappa**2 + eigenvalues) ** (-nu - 1)
-    np.testing.assert_allclose(matern_kernel(eigenvalues, u, kappa, nu), u @ np.diag(rho) @ u.T)
+    np.testing.assert_allclose(
+        matern_kernel(eigenvalues, u, kappa, nu), u @ np.diag(rho / rho.max()) @ u.T
+    )
 
 
 @pytest.mark.parametrize("build", [diffusion_kernel, matern_kernel])
@@ -285,7 +288,7 @@ def test_smoothing_rejects_empty_endpoints():
         vtx_out=np.array([], dtype=np.int64),
         n_per_hemi=2,
     )
-    with pytest.raises(ValueError, match="no positive mass"):
+    with pytest.raises(ValueError, match="no streamlines to smooth"):
         smooth_endpoints(empty, np.eye(2), np.eye(2))
 
 
@@ -305,10 +308,16 @@ def toy_endpoints():
 
 @pytest.fixture
 def toy_basis():
-    """An orthonormal eigenbasis for that toy hemisphere."""
-    u = np.linalg.qr(np.random.default_rng(0).standard_normal((3, 3)))[0]
-    eigenvalues = np.array([0.0, 0.5, 1.0])
-    return ((eigenvalues, u), (eigenvalues, u))
+    """A Laplace-Beltrami basis of that toy hemisphere: three vertices in a row, each of area 2.
+
+    The path's Laplacian solved against the vertex areas, as laplace_beltrami_basis solves
+    the grid's: a constant first mode at eigenvalue 0, the modes orthonormal under the
+    areas, and a heat kernel that is nonnegative.
+    """
+    stiffness = np.array([[1.0, -1.0, 0.0], [-1.0, 2.0, -1.0], [0.0, -1.0, 1.0]])
+    eigenvalues, vectors = np.linalg.eigh(stiffness / 2.0)
+    pair = (np.maximum(eigenvalues, 0.0), vectors / np.sqrt(2.0))
+    return (pair, pair)
 
 
 @pytest.fixture
@@ -327,7 +336,7 @@ def smoothable(sc_metadata, toy_endpoints):
         data=to_condensed(matrix).astype(np.float32),
         area=area,
         mask=np.ones(6, dtype=bool),
-        metadata=sc_metadata,
+        metadata=metadata_template("sc", **{**sc_metadata.fields, "streamline_weighting": "none"}),
         endpoints=toy_endpoints,
     )
 
@@ -339,57 +348,21 @@ def test_smooth_says_so_when_the_file_carries_no_endpoints(connectome):
         connectome.smooth(kernel="rdk")
 
 
-def _offline(*args, **kwargs):
-    raise OSError("no route to raw.githubusercontent.com")
+def test_a_functional_connectome_is_told_that_only_structural_ones_resmooth():
+    """fc.smooth() told the user to build streamline endpoints for an FC file (C1-28)."""
+    import sbci
+
+    with pytest.raises(
+        ValueError, match="Only a structural connectome can be re-smoothed"
+    ) as caught:
+        sbci.example("fc").smooth()
+    assert "Endpoints.from_snapped" not in str(caught.value)
 
 
-def test_smooth_says_so_when_the_basis_is_missing(smoothable, monkeypatch):
-    """With endpoints present, the next thing needed is the eigenbasis."""
-    from sbci import download, smoothing
-
-    assert smoothable.has_endpoints
-    monkeypatch.setattr(smoothing, "find_basis", lambda: None)
-    monkeypatch.setattr(download, "fetch_basis", _offline)  # never the network, in a test
-    with pytest.raises(ValueError, match="Laplace-Beltrami basis"):
-        smoothable.smooth(kernel="rdk")
-
-
-def test_the_failure_names_every_place_it_looked(smoothable, monkeypatch):
-    """A path error should say where to put the files, not just that they are absent."""
-    from sbci import download, smoothing
-
-    monkeypatch.setattr(smoothing, "find_basis", lambda: None)
-    monkeypatch.setattr(download, "fetch_basis", _offline)
-    with pytest.raises(ValueError) as caught:
-        smoothable.smooth(kernel="rdk")
-    message = str(caught.value)
-    assert smoothing.EIGENPAIR_ENV in message
-    assert ".cache" in message
-    for name in smoothing.EIGENPAIR_FILES:
-        assert name in message
-    assert "no route to raw.githubusercontent.com" in message  # why the fetch failed
-    assert "sbci basis" in message  # and how to fetch it where the network is
-
-
-def test_a_basis_found_nowhere_is_fetched_where_it_will_be_found_again(
-    smoothable, toy_basis, tmp_path, monkeypatch, capsys
-):
-    """The first rdk or matern smoothing on a machine fetches the basis, and says so."""
-    import scipy.io
-
-    from sbci import download, smoothing
-
-    files = zip(toy_basis, "LR", smoothing.EIGENPAIR_FILES, strict=True)
-    for (eigenvalues, vectors), side, name in files:
-        scipy.io.savemat(tmp_path / name, {f"Lambda_{side}": eigenvalues, f"U_{side}": vectors})
-    asked = []
-    monkeypatch.setattr(smoothing, "find_basis", lambda: None)
-    monkeypatch.setattr(download, "fetch_basis", lambda **kwargs: asked.append(kwargs) or tmp_path)
-    fetched = smoothable.smooth(kernel="rdk", bandwidth=1.0)
-    given = smoothable.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=toy_basis)
-    np.testing.assert_array_equal(np.asarray(fetched.data), np.asarray(given.data))
-    assert len(asked) == 1
-    assert "fetching it once, 100 MB" in capsys.readouterr().err
+def test_rdk_on_a_toy_grid_needs_a_basis_of_its_own(smoothable):
+    """The grid's own basis is built for the 5124-vertex grid; a toy grid says so plainly."""
+    with pytest.raises(ValueError, match="6 vertex weights for a basis of 2562 \\+ 2562 vertices"):
+        smoothable.smooth(kernel="rdk", bandwidth=1.0)
 
 
 def test_the_basis_is_fetched_where_find_basis_looks(tmp_path, monkeypatch):
@@ -405,14 +378,67 @@ def test_the_basis_is_fetched_where_find_basis_looks(tmp_path, monkeypatch):
     assert tuple(download.BASIS_FILES) == smoothing.EIGENPAIR_FILES
 
 
-def test_the_basis_is_found_from_the_environment(tmp_path, monkeypatch):
-    """SBCI_LBO_DIR saves passing eigenpairs= on every call."""
-    from sbci import smoothing
+def _pin(monkeypatch, folder, contents=(b"left basis", b"right basis")):
+    """Write two small basis files and pin their sizes and digests, as BASIS_FILES pins the real."""
+    import hashlib
 
+    from sbci import download, smoothing
+
+    pinned = {}
+    for name, content in zip(smoothing.EIGENPAIR_FILES, contents, strict=True):
+        (folder / name).write_bytes(content)
+        pinned[name] = (len(content), hashlib.sha256(content).hexdigest())
+    monkeypatch.setattr(download, "BASIS_FILES", pinned)
+
+
+def test_the_basis_is_found_from_the_environment_and_checked(tmp_path, monkeypatch):
+    """Any two files of the right names were taken: two empty ones failed later in SciPy (A2-08)."""
+    from sbci import smoothing
+    from sbci.errors import MissingDataError
+
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    monkeypatch.delenv("SBCI_TOOLKIT", raising=False)
+    monkeypatch.setenv(smoothing.EIGENPAIR_ENV, str(tmp_path))
+    _pin(monkeypatch, tmp_path)
+    assert smoothing.find_basis() == tmp_path
+    (tmp_path / smoothing.EIGENPAIR_FILES[1]).write_bytes(b"right basiz")  # same size, damaged
+    with pytest.raises(MissingDataError) as caught:
+        smoothing.find_basis()
+    message = str(caught.value)
+    assert smoothing.EIGENPAIR_FILES[1] in message and "SHA-256" in message
+    assert smoothing.EIGENPAIR_FILES[0] not in message, "the intact file is not blamed"
+    assert "sbci basis --force" in message
     for name in smoothing.EIGENPAIR_FILES:
         (tmp_path / name).write_bytes(b"")
-    monkeypatch.setenv(smoothing.EIGENPAIR_ENV, str(tmp_path))
-    assert smoothing.find_basis() == tmp_path
+    with pytest.raises(MissingDataError, match="is 0 bytes, not the 10 of the SBCI_Toolkit's"):
+        smoothing.find_basis()
+
+
+def test_a_damaged_basis_is_skipped_for_an_intact_one_further_on(tmp_path, monkeypatch):
+    from sbci import smoothing
+
+    damaged, intact = tmp_path / "damaged", tmp_path / "home" / ".cache" / "sbci" / "lbo"
+    for folder in (damaged, intact):
+        folder.mkdir(parents=True)
+    _pin(monkeypatch, intact)
+    for name in smoothing.EIGENPAIR_FILES:
+        (damaged / name).write_bytes(b"truncated")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("SBCI_TOOLKIT", raising=False)
+    monkeypatch.setenv(smoothing.EIGENPAIR_ENV, str(damaged))
+    assert smoothing.find_basis() == intact
+
+
+def test_a_basis_file_that_cannot_be_read_is_named_with_its_fix(tmp_path):
+    """An empty file raised SciPy's 'Mat file appears to be truncated', naming nothing (A2-08)."""
+    from sbci.errors import FormatError
+    from sbci.smoothing import load_eigenpairs
+
+    path = tmp_path / "EV_LBO_ds_ico4_L.mat"
+    path.write_bytes(b"")
+    with pytest.raises(FormatError) as caught:
+        load_eigenpairs(path, "L")
+    assert str(path) in str(caught.value) and "sbci basis --force" in str(caught.value)
 
 
 def test_a_directory_missing_one_hemisphere_is_not_accepted(tmp_path, monkeypatch):
@@ -456,7 +482,7 @@ def test_smooth_method_still_validates_its_arguments(connectome):
         connectome.smooth(kernel="gaussian")
 
 
-# --- the spherical heat kernel -------------------------------------------
+# --- the spherical kernel concon applies -----------------------------------
 
 
 def _fine_sphere(subdivisions=3):
@@ -475,26 +501,31 @@ def test_the_kernel_does_not_integrate_to_one():
     """The kernel concon applies is not a probability density, and that is fine.
 
     A heat kernel integrates to 1 because its weight is (2l+1)/4pi and only the
-    l=0 term survives integration. concon's weight is (2l+1)^(3/2)/sqrt(4pi),
-    so the surviving term leaves sqrt(4pi) instead. The pipeline divides by the
-    streamline count afterwards rather than normalizing the kernel, so this
-    factor is part of what the released files carry.
+    l=0 term survives integration. concon's weight is (2l+1)^(3/2)/sqrt(4pi), so
+    its 33-term series, untruncated in angle, integrates to sqrt(4pi). That is
+    not the kernel concon applies, though: it cuts the series off at 12.2
+    degrees, dropping the negative lobes beyond, and the cut kernel integrates
+    to 11.6 at sigma 0.005. No constant of either survives into a file: the
+    pipeline divides the density by the streamline count, and the package
+    normalizes it to unit mass.
     """
     from sbci.smoothing import spherical_heat_kernel
 
     pole = np.array([0.0, 0.0, 1.0])
 
-    def integral(subdivisions):
+    def integral(subdivisions, epsilon):
         vertices, areas = _fine_sphere(subdivisions)
-        return float(spherical_heat_kernel(vertices @ pole, 0.005, epsilon=None) @ areas)
+        return float(spherical_heat_kernel(vertices @ pole, 0.005, epsilon=epsilon) @ areas)
 
     # The kernel spans about 12 degrees, so a coarse grid under-resolves it;
-    # refining converges on sqrt(4 pi), which is what pins the constant.
-    coarse, fine = integral(4), integral(5)
+    # refining converges on sqrt(4 pi), which is what pins the series' constant.
+    coarse, fine = integral(4, None), integral(5, None)
     target = np.sqrt(4 * np.pi)
     assert abs(fine - target) < abs(coarse - target), "should converge as the grid refines"
     assert fine == pytest.approx(target, rel=5e-3)
-    assert fine > 3.0, "and so emphatically not 1"
+    # The kernel as applied, cut off and read through the binary's tables:
+    # 11.5954 by quadrature in the cosine (A2-10)
+    assert integral(5, 0.001) == pytest.approx(11.5954, rel=5e-3)
 
 
 def test_the_kernel_falls_from_its_centre_then_stops_dead():
@@ -1104,7 +1135,10 @@ def test_smooth_shk_end_to_end_from_barycentric_endpoints():
     bary = np.empty((2 * n, 3))
     for side, name in ((0, "L"), (1, "R")):
         part = sphere.hemisphere(name)
-        w, i, f = MeshQuery(part.vertices, part.faces).query_faces(points[hemispheres == side])
+        # on the unit sphere, where the points are: located on the bundled sphere, of
+        # radius 100, they landed a median 3.4 degrees from where they were drawn (A2-10)
+        unit = part.vertices / np.linalg.norm(part.vertices, axis=1, keepdims=True)
+        w, i, f = MeshQuery(unit, part.faces).query_faces(points[hemispheres == side])
         vertex[hemispheres == side] = i[np.arange(len(i)), np.argmax(w, axis=1)] + side * half
         triangle[hemispheres == side] = f + side * faces_per_hemi
         bary[hemispheres == side] = w
@@ -1119,7 +1153,11 @@ def test_smooth_shk_end_to_end_from_barycentric_endpoints():
 
     cc = sbci.example("sc")
     cc.endpoints = endpoints
-    smoothed = cc.smooth(kernel="shk")
+    rebuilt = np.concatenate(endpoint_positions(endpoints))
+    drawn = np.concatenate([points[:n], points[n:]])
+    offset = np.degrees(np.arccos(np.clip(np.einsum("ij,ij->i", rebuilt, drawn), -1, 1)))
+    assert offset.max() < 0.01, "each endpoint is where it was drawn"
+    smoothed = cc.smooth(kernel="shk", mask_medial_wall=False)
     dense = smoothed.dense().astype(np.float64)
     assert smoothed.metadata["kernel"] == "shk" and smoothed.metadata["bandwidth"] == 0.005
     assert float(cc.area @ dense @ cc.area) == pytest.approx(1.0, rel=1e-6)
@@ -1427,3 +1465,186 @@ def test_endpoint_positions_refuse_a_vertex_beyond_one_edge_of_its_triangle():
     holder = sbci.ContinuousConnectome(sc.data, sc.area, sc.mask, sc.metadata, endpoints=ends)
     with pytest.raises(ValueError, match="farther than one edge of the grid"):
         holder.smooth(kernel="shk")
+
+
+# --- the review of 23 November 2026 -------------------------------------------------
+
+
+def test_rdk_builds_the_grids_own_basis_with_nothing_to_fetch(monkeypatch):
+    """The toolkit's basis was fetched, 100 MB, and was not orthonormal on the grid (A2-02).
+
+    The grid's own is the bundled white surface's Laplace-Beltrami operator, solved in
+    full: orthonormal under its vertex areas, with a constant first mode at 0.
+    """
+    from sbci import download, smoothing
+    from sbci.surface import load_surface
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the toolkit's basis was looked for")
+
+    monkeypatch.setattr(smoothing, "find_basis", refuse)
+    monkeypatch.setattr(download, "fetch_basis", refuse)
+    for side in "LR":
+        eigenvalues, eigenvectors, areas = smoothing.laplace_beltrami_basis(side)
+        assert eigenvalues.shape == (2562,) and eigenvalues[0] == 0.0
+        assert (np.diff(eigenvalues) >= 0).all() and eigenvalues[1] > 0
+        gram = eigenvectors.T @ (areas[:, None] * eigenvectors)
+        assert np.abs(gram - np.eye(2562)).max() < 1e-10
+        np.testing.assert_allclose(eigenvectors[:, 0], eigenvectors[0, 0], rtol=1e-10)
+        assert not eigenvalues.flags.writeable, "shared between calls, so read-only"
+    white = load_surface("white").hemisphere("L")
+    stiffness, _ = smoothing.laplace_beltrami_operator(white.vertices, white.faces)
+    assert (stiffness - np.diag(np.diag(stiffness)) <= 1e-12).all(), "every edge weight >= 0"
+
+
+def test_the_rdk_kernel_is_nonnegative_local_and_of_unit_mass_per_endpoint():
+    """At the reference's bandwidth 38% of the kernel's weight was negative, 55% beyond 20 degrees.
+
+    And under the file's weights an endpoint's kernel integrated to 0.64-1.51, by where
+    it landed (A2-02, A2-03). The kernel smooth() applies is checked here at that
+    bandwidth and at its own default.
+    """
+    from sbci.io.cifti import vertex_areas
+    from sbci.smoothing import DEFAULT_KAPPA, kernel_matrices
+    from sbci.surface import load_surface
+
+    area = np.asarray(vertex_areas()[1], dtype=np.float64)
+    sphere = load_surface("sphere").vertices[:2562]
+    sphere = sphere / np.linalg.norm(sphere, axis=1, keepdims=True)
+    angle = np.degrees(np.arccos(np.clip(sphere @ sphere.T, -1.0, 1.0)))
+    for kappa, far in ((1.9483, 1e-4), (DEFAULT_KAPPA["rdk"], 1e-2)):
+        left, right = kernel_matrices("rdk", kappa, area=area)
+        np.testing.assert_allclose(area[:2562] @ left, 1.0, rtol=1e-12)
+        np.testing.assert_allclose(area[2562:] @ right, 1.0, rtol=1e-12)
+        weighted = area[:2562, None] * left
+        assert weighted.min() >= -1e-12 * weighted.max(), "nonnegative, to rounding"
+        beyond = (weighted * (angle > 20.0)).sum(axis=0)
+        assert np.median(beyond) < far, f"kappa {kappa}: {np.median(beyond):.2e} beyond 20 degrees"
+
+
+def test_every_streamline_carries_the_same_mass_with_rdk(monkeypatch):
+    """Under the shipped basis a streamline's mass went as g(p) g(q), 0.64-1.51 an end (A2-03)."""
+    import sbci
+    from sbci import download, smoothing
+    from sbci.smoothing import DEFAULT_KAPPA, Endpoints
+    from sbci.surface import load_surface
+
+    monkeypatch.setattr(smoothing, "find_basis", lambda: None)
+    monkeypatch.setattr(download, "fetch_basis", lambda **kwargs: None)
+    sc = sbci.example()
+    sphere = load_surface("sphere").vertices[:2562]
+    sphere = sphere / np.linalg.norm(sphere, axis=1, keepdims=True)
+    # two left-hemisphere streamlines, their four ends far from each other and from the wall
+    cortex = np.flatnonzero(sc.mask[:2562])
+    wall = sphere[~sc.mask[:2562]]
+    clear = cortex[(sphere[cortex] @ wall.T).max(axis=1) < np.cos(np.radians(25.0))]
+    rng = np.random.default_rng(4)
+    while True:
+        ends = rng.choice(clear, 4, replace=False)
+        gaps = sphere[ends] @ sphere[ends].T
+        if (gaps[np.triu_indices(4, 1)] < np.cos(np.radians(60.0))).all():
+            break
+    sc.endpoints = Endpoints(surf_in=[0, 0], surf_out=[0, 0], vtx_in=ends[:2], vtx_out=ends[2:])
+    out = sc.smooth(kernel="rdk")
+    assert out.metadata["bandwidth"] == DEFAULT_KAPPA["rdk"]
+    assert "the grid's own Laplace-Beltrami eigenpairs" in out.metadata["provenance"]
+    dense = out.dense(np.float64)
+    weights = np.outer(sc.area, sc.area) * dense
+    near = sphere @ sphere[ends].T > np.cos(np.radians(30.0))  # (2562, 4)
+    masses = []
+    for first, second in ((0, 2), (1, 3)):
+        block = np.outer(near[:, first], near[:, second])
+        masses.append(2 * weights[:2562, :2562][block].sum())  # and its mirror across the diagonal
+    assert sum(masses) == pytest.approx(1.0, abs=0.02), "nearly all the mass lies near the ends"
+    assert masses[0] == pytest.approx(masses[1], rel=0.02), masses
+
+
+def test_a_basis_that_makes_a_signed_kernel_draws_a_warning(smoothable):
+    """The toolkit's basis made a kernel 38% negative without a word (A2-02)."""
+    modes = np.array([[1, 1, 1], [1, -1, 0], [1, 1, -2]]) / np.sqrt([[3], [2], [6]])
+    signed = ((np.array([0.0, 0.1, 10.0]), modes.T),) * 2  # K[0, 1] = 1/3 - 0.95/2 < 0
+    with pytest.warns(UserWarning, match="of the kernel's weight is negative"):
+        smoothable.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=signed)
+
+
+@pytest.mark.parametrize(("nu", "kappa"), [(15.0, 0.6252), (200.0, 50.0), (100.0, 1000.0)])
+def test_extreme_matern_settings_still_make_a_finite_unit_mass_density(
+    smoothable, toy_basis, nu, kappa
+):
+    """An absolute floor zeroed every weight at nu 15; nu 200 at kappa 50 came back NaN (A2-05)."""
+    out = smoothable.smooth(kernel="matern", bandwidth=kappa, nu=nu, eigenpairs=toy_basis)
+    dense = out.dense(np.float64)
+    assert np.isfinite(dense).all()
+    assert smoothable.area @ dense @ smoothable.area == pytest.approx(1.0, rel=1e-6)
+
+
+def test_a_kernel_that_is_zero_everywhere_is_refused_by_its_settings(smoothable):
+    """The refusal said "check the endpoints" when the kernel's settings had zeroed it (A2-05)."""
+    vectors = np.eye(3) / np.sqrt(2.0)
+    no_zero_mode = ((np.array([0.5, 1.0, 1.5]), vectors),) * 2
+    with pytest.raises(ValueError) as caught:
+        smoothable.smooth(kernel="rdk", bandwidth=1000.0, eigenpairs=no_zero_mode)
+    message = str(caught.value)
+    assert "kernel='rdk', bandwidth=1000" in message and "zero everywhere" in message
+    assert "not the endpoints" in message
+
+
+def test_a_density_that_is_not_finite_is_refused_before_anything_can_save_it():
+    """At nu 200 and kappa 50 smooth() returned all NaN, which save() wrote (A2-05)."""
+    from sbci.smoothing import _finish
+
+    class Fake:
+        def __init__(self, data, area, mask, metadata, coords, endpoints):
+            self.data, self.area, self.mask = data, area, mask
+            self.metadata, self.coords, self.endpoints = metadata, coords, endpoints
+
+    connectome = Fake(None, np.ones(4), np.ones(4, bool), metadata_template("sc"), None, None)
+    dense = np.full((4, 4), np.nan)
+    with pytest.raises(ValueError, match="kernel='matern', bandwidth=50, nu=200.* not finite"):
+        _finish(connectome, dense, "matern", 50.0, nu=200.0)
+
+
+def test_a_resmoothed_file_says_how_it_was_smoothed(smoothable, toy_basis, tmp_path):
+    """The released provenance, "smoothed by sbci (kernel shk ...)", survived an rdk one (A2-09)."""
+    import hashlib
+
+    import scipy.io
+
+    from sbci import smoothing
+
+    smoothable.metadata.fields["provenance"] = (
+        "HCP Young Adult sub-synth01; smoothed by sbci (kernel shk, bandwidth 0.005); "
+        "endpoints from snapped_fibers.npz on the registered sphere; built"
+    )
+    out = smoothable.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=toy_basis)
+    said = out.metadata["provenance"]
+    assert "kernel shk" not in said and "(kernel rdk, bandwidth 1, basis eigenpairs passed" in said
+    assert said.startswith("HCP Young Adult sub-synth01; re-smoothed by sbci ")
+    assert said.endswith("; endpoints from snapped_fibers.npz on the registered sphere; built")
+    again = out.smooth(kernel="matern", bandwidth=2.0, nu=1.0, eigenpairs=toy_basis)
+    assert again.metadata["provenance"].count("smoothed by sbci") == 1
+    assert "(kernel matern, bandwidth 2, nu 1, basis" in again.metadata["provenance"]
+    # read from files, the basis is named by each file's SHA-256 (A2-08)
+    for (eigenvalues, vectors), side, name in zip(
+        toy_basis, "LR", smoothing.EIGENPAIR_FILES, strict=True
+    ):
+        scipy.io.savemat(tmp_path / name, {f"Lambda_{side}": eigenvalues, f"U_{side}": vectors})
+    filed = smoothable.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=tmp_path)
+    for name in smoothing.EIGENPAIR_FILES:
+        digest = hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+        assert f"{name} sha256 {digest}" in filed.metadata["provenance"]
+
+
+def test_a_sigma_below_the_width_floor_draws_a_warning():
+    """Below sigma 0.001 the 33 terms, not sigma, set the width, without a word (A2-07)."""
+    import warnings
+
+    import sbci
+
+    sc = sbci.example()
+    sc.endpoints = sc.endpoints.take(np.arange(40))
+    with pytest.warns(UserWarning, match="sigma 0.0005 is below 0.001"):
+        sc.smooth(kernel="shk", bandwidth=0.0005)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sc.smooth(kernel="shk", bandwidth=0.001)

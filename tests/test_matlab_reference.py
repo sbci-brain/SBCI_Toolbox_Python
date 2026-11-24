@@ -136,21 +136,37 @@ def test_density_matches_matlab(eigenpairs, endpoints, reference_kappa):
     assert np.corrcoef(density.ravel(), theirs.ravel())[0, 1] > 1 - 1e-12
 
 
-def test_smooth_method_matches_matlab(eigenpairs, reference_kappa):
+def test_smooth_method_matches_matlab(eigenpairs, reference_kappa, monkeypatch):
     """The method, not just the function underneath it.
 
     ``smooth_endpoints`` is checked above. ``ContinuousConnectome.smooth()``
-    adds four steps on top of it -- building both kernels from the basis,
-    selecting the bandwidth, zeroing the diagonal the storage format excludes,
-    and renormalizing to area-weighted unit mass -- and those need their own
-    comparison. MATLAB's density is renormalized the same way here, so the two
-    are the same quantity.
+    adds its own steps on top of it -- building both kernels from the basis,
+    zeroing the diagonal the storage format excludes, and renormalizing to
+    area-weighted unit mass -- and those need their own comparison. MATLAB's
+    density is renormalized the same way here, so the two are the same
+    quantity.
+
+    Two steps of ``smooth()`` correct the MATLAB, and are taken back out here
+    rather than given a switch in the package: it scales each kernel column to
+    unit mass under the file's weights, which the MATLAB does not (A2-03), and
+    it masks the medial wall by default, which the MATLAB does not either. The
+    MATLAB's basis, the toolkit's files, is passed as the MATLAB used it.
     """
-    folder = pathlib.Path(os.environ.get("SBCI_EXAMPLE_SC", "/work/users/x/y/xya/sbci-derivatives"))
+    folder = os.environ.get("SBCI_EXAMPLE_SC")
+    if not folder:
+        pytest.skip("SBCI_EXAMPLE_SC names no folder holding sub-example's SC with endpoints")
+    folder = pathlib.Path(folder)
     path = REFERENCE / "reference_density.mat"
     _require(path)
 
-    from sbci import ContinuousConnectome
+    from sbci import ContinuousConnectome, smoothing
+
+    def as_the_matlab_builds_them(kernel, bandwidth, area, left, right, nu=None):
+        """The MATLAB's kernels: the reference's formula on its basis, no column scaled."""
+        assert kernel == "rdk"
+        return diffusion_kernel(*left, bandwidth), diffusion_kernel(*right, bandwidth)
+
+    monkeypatch.setattr(smoothing, "_kernel_pair", as_the_matlab_builds_them)
 
     # the lab's copy is named for its endpoints; tools/import_legacy.py --endpoints writes
     # the plain name
@@ -172,7 +188,10 @@ def test_smooth_method_matches_matlab(eigenpairs, reference_kappa):
 
     mine = (
         connectome.smooth(
-            kernel="rdk", bandwidth=reference_kappa, eigenpairs=TOOLKIT / "concon_estimate"
+            kernel="rdk",
+            bandwidth=reference_kappa,
+            eigenpairs=(eigenpairs[0], eigenpairs[1]),
+            mask_medial_wall=False,
         )
         .dense()
         .astype(np.float64)

@@ -1,44 +1,56 @@
-"""Kernel smoothing on the cortical surface.
+"""Kernel smoothing on the cortical surface: streamline endpoints to a continuous connectome.
 
-Port of ``SBCI_Toolkit/concon_estimate/compute_diffusion_kernel_matrix.m``,
+Three kernels (:data:`KERNELS`). ``shk``, the default, puts a bump around each
+endpoint's exact position on the registered sphere and reproduces the released
+files: it is the spherical kernel ``concon`` applies. ``rdk`` and ``matern``
+smooth the endpoints' vertex counts with the white surface's Laplace-Beltrami
+basis, as ``K A K'``: the Riemannian diffusion and Matern kernels of
+``SBCI_Toolkit/concon_estimate/compute_diffusion_kernel_matrix.m``,
 ``compute_matern_kernel_matrix.m`` and the driver
 ``rdk_smoothed_concon_compute.m``.
 
-The method
-----------
-Streamline endpoints give a discrete count matrix ``A`` on the surface mesh.
-Smoothing it into a continuous density is a congruence, ``K A K``, where ``K``
-is a kernel built from the Laplace-Beltrami eigenpairs of the hemisphere::
+The rdk and matern method
+-------------------------
+Streamline endpoints give a count matrix ``A`` on the grid, one block per pair
+of hemispheres. With a hemisphere's Laplace-Beltrami eigenpairs
+``(Lambda, Phi)``, the kernel is::
 
-    K = U diag(rho(Lambda)) U'
+    K = Phi diag(rho(Lambda)) Phi'
 
-``rho`` is the only thing that differs between the two kernels: the Riemannian
-diffusion kernel uses ``exp(-kappa^2 Lambda / 2)`` and the Matern kernel uses
-``(2 nu / kappa^2 + Lambda)^(-nu-1)``. ``K`` is symmetric by construction, so
-``K A K`` and ``K A K'`` are the same matrix.
+``rho`` is the only thing that differs between the two kernels: the diffusion
+kernel uses ``exp(-kappa^2 Lambda / 2)`` and the Matern kernel
+``(2 nu / kappa^2 + Lambda)^(-nu-1)``. Column ``j`` of ``K`` is the bump an
+endpoint at vertex ``j`` spreads over the surface. Each column is scaled to
+integrate to one under the file's vertex weights, ``Kt = K / (area @ K)``, and
+the density is ``Kt A Kt'``: every streamline end carries the same mass
+wherever it lands.
 
-Written this way the whole smoothing step is a handful of dense matrix
-products, which is where the WP3 speed target comes from -- under a minute per
-subject against the 2-8 hours the original pipeline takes.
+The basis is built here, on the grid itself (:func:`laplace_beltrami_basis`):
+the cotangent Laplacian of the bundled ico4 white surface -- fsaverage's white
+surface, averaged over each grid vertex -- on its intrinsic Delaunay
+triangulation, with each vertex's lumped area, all 2,562 modes of a hemisphere,
+orthonormal under those areas. ``K`` is then a proper smoothing kernel:
+nonnegative, local, integrating to one over the surface, and shrinking to a
+point mass at its vertex as the bandwidth does. Building it takes under half a
+minute for both hemispheres on one core, once a session, and needs no download.
 
-Two properties of the reference implementation are easy to get wrong and are
-reproduced deliberately:
-
-*Eigenvectors are not Euclidean-orthonormal.* ``U' U`` differs from the
-identity by as much as 0.12 on the shipped ico4 eigenpairs, because
-Laplace-Beltrami eigenfunctions are orthonormal against the surface mass
-matrix, not against the dot product. ``K`` therefore does not tend to the
-identity as the bandwidth shrinks, and no step here assumes it does.
-
-*Spectral truncation makes small negative entries.* A truncated eigenbasis
-cannot represent a nonnegative function exactly, so ``K A K`` carries small
-negative values. The reference sums only the positive entries to form the
-normalizing constant and then clips the negatives to zero, and so does this.
+The reference's own basis is not that, and this module no longer uses it unless
+asked to. ``EV_LBO_ds_ico4_{L,R}.mat`` hold the first 2,562 eigenvectors of
+fsaverage's white surface at ico6, sampled at the ico4 vertices and given unit
+Euclidean length. They are not orthonormal on ico4 (``U' U`` is off the
+identity by up to 0.12), so ``K`` does not shrink to a point mass as the
+bandwidth does, but to ``U U'``. At the reference's default bandwidth about a
+third of the kernel's mass is negative and half lies beyond 20 degrees; the
+reference clips the density at zero. :func:`find_basis` and ``eigenpairs=``
+still read those files, for comparisons with the MATLAB, and :func:`smooth`
+warns when a basis makes a signed kernel.
 """
 
 from __future__ import annotations
 
 import copy
+import re
+import warnings
 from dataclasses import dataclass
 from functools import lru_cache, partial
 
@@ -54,32 +66,59 @@ item 10.
 ``shk``
     The spherical kernel ``concon`` applies (Moyer et al., MICCAI 2016), the
     default, and the one that produced every released ``smoothed_sc_avg_*.mat``.
-    Its bandwidth is ``sigma``. Reproduces ``c3_main`` at r = 1.000000 and
-    scale 1.000000 at full scale on the tutorial subject, but for the grid's
-    south pole, which the binary never writes and this does; the amplitude offset an
-    earlier version carried was the binary's lookup-table quantization, which
-    :class:`KernelTable` reproduces -- see PORTING.md item 6. Not the heat
-    kernel, despite the name: :func:`spherical_heat_kernel` explains the weight.
+    Its bandwidth is ``sigma``, a diffusion time on the unit sphere. Reproduces
+    ``c3_main`` at r = 1.000000 and scale 1.000000 at full scale on the
+    tutorial subject, but for the grid's south pole, which the binary never
+    writes and this does; the amplitude offset an earlier version carried was
+    the binary's lookup-table quantization, which :class:`KernelTable`
+    reproduces -- see PORTING.md item 6. Its name, and that of
+    :func:`spherical_heat_kernel`, is historical: it is not a heat kernel, and
+    that function's docstring explains the weight.
 ``rdk``
     Riemannian diffusion kernel (Wang, Li and Zhang, Imaging Neuroscience 3, 2025,
-    doi:10.1162/imag.a.912), built from
-    Laplace-Beltrami eigenfunctions on the cortical surface itself. Bandwidth
-    ``kappa``. Ported and verified -- :func:`diffusion_kernel`.
+    doi:10.1162/imag.a.912): the heat kernel of the white surface, from its
+    Laplace-Beltrami eigenpairs (:func:`laplace_beltrami_basis`). Bandwidth
+    ``kappa``, in mm on the white surface. :func:`diffusion_kernel` is the
+    reference's formula, checked against the MATLAB on the MATLAB's own basis.
 ``matern``
-    Matern kernel on the same eigenbasis, from
-    ``compute_matern_kernel_matrix.m``. Bandwidth ``kappa`` plus a smoothness
-    ``nu``. Ported and verified -- :func:`matern_kernel`.
+    Matern kernel on the same basis, from ``compute_matern_kernel_matrix.m``.
+    Bandwidth ``kappa``, in mm, plus a smoothness ``nu``. :func:`matern_kernel`.
 
 ``bandwidth`` therefore means different things for different kernels, and has
 to be read together with ``kernel`` in the metadata.
 """
 
 TRUNCATION_FLOOR = 1e-30
-"""Kernel eigenvalues below this are set to zero, as in the MATLAB."""
+"""Kernel weights below this fraction of the largest are set to zero.
+
+The MATLAB's floor is absolute, on a diffusion kernel whose largest weight,
+at the eigenvalue 0, is 1; for it the two are the same. Relative, the floor
+also serves the Matern kernel, whose largest weight is
+``(2 nu / kappa^2)^(-nu-1)``, 1.3e-174 at ``nu`` 100 and ``kappa`` 1.95:
+the absolute floor zeroed every weight from ``nu`` 15 up at small ``kappa``."""
 
 DEFAULT_NU = 3.0
 """The Matern smoothness :func:`smooth` uses when given none: the ``nu = 3`` of
 ``rdk_smoothed_concon_compute.m``, which names 1, 2 and 3 as the values to use."""
+
+DEFAULT_KAPPA = {"rdk": 5.5, "matern": 5.2}
+"""The bandwidth :func:`smooth` uses for ``rdk`` and ``matern`` when given none, in mm.
+
+Each makes its kernel average over as many vertices as ``shk`` does at its
+default sigma of 0.005: an effective number of independent vertices,
+``K_eff``, of 302.7 for ``shk`` over the cortex, against 306 for ``rdk`` at
+5.5 mm and 299 for ``matern`` at 5.2 mm. ``K_eff`` is the measure of the
+paper's Section 6.3: the cortex's weight over the mean weight one smoothed
+value averages over, ``(sum a w)^2 / sum a w^2``, with the file's vertex
+weights ``a``. The three default kernels thus smooth at one scale.
+``matern``'s matches at its default ``nu``, 3; another ``nu`` keeps the
+bandwidth and changes the scale.
+
+The reference derived its bandwidth from the spectrum instead
+(:func:`kappa_candidates`, the fourth of ten): 1.95 mm on its own basis, and
+1.8 mm on the grid's, well below the grid's mean edge of 5.4 mm on the white
+surface, where the kernel barely smooths at all (``K_eff`` 2,437 at 1.95 mm).
+"""
 
 
 def diffusion_kernel(eigenvalues: np.ndarray, eigenvectors: np.ndarray, kappa: float) -> np.ndarray:
@@ -90,9 +129,13 @@ def diffusion_kernel(eigenvalues: np.ndarray, eigenvectors: np.ndarray, kappa: f
     eigenvalues
         Laplace-Beltrami eigenvalues, ascending, length ``maxk``.
     eigenvectors
-        ``(n_vertices, maxk)`` eigenfunctions, one per column.
+        ``(n_vertices, maxk)`` eigenfunctions, one per column. With eigenvectors
+        orthonormal under the surface's vertex areas, as
+        :func:`laplace_beltrami_basis` gives them, column ``j`` is the heat that
+        a unit mass at vertex ``j`` spreads, per unit area.
     kappa
-        Bandwidth. Larger values smooth more.
+        Bandwidth, in the surface's units (mm on the white surface); the heat
+        diffuses for a time ``kappa^2 / 2``. Larger values smooth more.
 
     Examples
     --------
@@ -111,20 +154,36 @@ def diffusion_kernel(eigenvalues: np.ndarray, eigenvectors: np.ndarray, kappa: f
 def matern_kernel(
     eigenvalues: np.ndarray, eigenvectors: np.ndarray, kappa: float, nu: float = 3.0
 ) -> np.ndarray:
-    """Matern kernel ``U diag((2 nu / kappa^2 + Lambda)^(-nu-1)) U'``.
+    """Matern kernel ``U diag((2 nu / kappa^2 + Lambda)^(-nu-1)) U'``, its largest weight 1.
+
+    The weights are formed in log space and divided by the largest, which is
+    the diffusion kernel's own scale: a larger ``nu`` or a smaller ``kappa``
+    took them below 1e-300 or above 1e300 as written, and the kernel came back
+    zero, or ``K A K`` infinite. The scale cancels in the smoothing, which
+    normalizes, and the floor of :data:`TRUNCATION_FLOOR` applies relative to it.
 
     Parameters
     ----------
+    kappa
+        Bandwidth, in the surface's units (mm on the white surface).
     nu
         Differentiability. The reference script uses 1, 2 or 3.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> lam = np.array([0.0, 1.0, 2.0])
+    >>> K = matern_kernel(lam, np.eye(3), kappa=1.0, nu=200.0)   # weights near 1e-523 as written
+    >>> np.round(np.diag(K), 4).tolist()    # near the diffusion kernel's 0.6065 and 0.3679
+    [1.0, 0.6054, 0.367]
     """
     if not (kappa > 0 and np.isfinite(kappa)):
         raise ValueError(f"kappa must be positive and finite, got {kappa}")
-    if not nu > 0:
-        raise ValueError(f"nu must be positive, got {nu}")
+    if not (nu > 0 and np.isfinite(nu)):
+        raise ValueError(f"nu must be positive and finite, got {nu}")
     lam = _ascending(eigenvalues)
-    rho = (2.0 * nu / kappa**2 + lam) ** (-nu - 1.0)
-    return _assemble(rho, eigenvectors)
+    log_rho = -(nu + 1.0) * np.log(2.0 * nu / kappa**2 + lam)
+    return _assemble(np.exp(log_rho - log_rho.max()), eigenvectors)
 
 
 def _ascending(eigenvalues) -> np.ndarray:
@@ -145,14 +204,184 @@ def _ascending(eigenvalues) -> np.ndarray:
 
 
 def _assemble(rho: np.ndarray, eigenvectors: np.ndarray) -> np.ndarray:
-    """``U diag(rho) U'``, with the reference's truncation floor applied."""
+    """``U diag(rho) U'``, with the truncation floor applied relative to the largest weight."""
     eigenvectors = np.asarray(eigenvectors, dtype=np.float64)
     if eigenvectors.ndim != 2:
         raise ValueError(f"eigenvectors must be 2-D, got shape {eigenvectors.shape}")
     if rho.size != eigenvectors.shape[1]:
         raise ValueError(f"{rho.size} eigenvalues for {eigenvectors.shape[1]} eigenvectors")
-    rho = np.where(rho < TRUNCATION_FLOOR, 0.0, rho)
+    largest = float(rho.max()) if rho.size else 0.0
+    rho = np.where(rho < TRUNCATION_FLOOR * largest, 0.0, rho)
     return (eigenvectors * rho[np.newaxis, :]) @ eigenvectors.T
+
+
+def _intrinsic_delaunay(vertices: np.ndarray, faces: np.ndarray):
+    """The intrinsic Delaunay triangulation of a mesh, by edge flips.
+
+    A triangle mesh's cotangent Laplacian gives an edge a negative weight
+    where the two angles facing it sum past 180 degrees, about one edge in
+    thirteen on the ico4 white surface; a heat kernel built on it then dips
+    below zero near those edges. Flipping each such edge to the other diagonal
+    of its two triangles, with the new diagonal's length taken from the two
+    triangles unfolded flat, keeps the surface's metric exactly and changes
+    only how it is triangulated; repeated until no edge is left, every weight
+    is nonnegative (Bobenko and Springborn, Discrete Comput Geom 38, 2007).
+
+    Returns ``(origin, length)``: for each halfedge ``3 f + k`` of the flipped
+    triangulation -- face ``f`` running round its three halfedges in order --
+    the vertex it leaves and its length.
+    """
+    corners = np.asarray(faces, dtype=np.int64)
+    points = np.asarray(vertices, dtype=np.float64)
+    origin = corners.reshape(-1).copy()
+    target = corners[:, [1, 2, 0]].reshape(-1).copy()
+    length = np.linalg.norm(points[target] - points[origin], axis=1)
+    halfedge = {(int(a), int(b)): h for h, (a, b) in enumerate(zip(origin, target, strict=True))}
+    try:
+        twin = np.array([halfedge[(int(b), int(a))] for a, b in zip(origin, target, strict=True)])
+    except KeyError:
+        raise ValueError("the mesh is not closed: an edge has a single triangle") from None
+
+    def following(h):
+        return h - h % 3 + (h + 1) % 3
+
+    def preceding(h):
+        return h - h % 3 + (h + 2) % 3
+
+    def cot_facing(h):  # cotangent of the angle facing halfedge h, from its triangle's sides
+        a, b, c = length[h], length[following(h)], length[preceding(h)]
+        s = 0.5 * (a + b + c)
+        area = np.sqrt(max(s * (s - a) * (s - b) * (s - c), 0.0))
+        return (b * b + c * c - a * a) / (4.0 * area) if area > 0 else -np.inf
+
+    pending = list(range(origin.size))
+    while pending:
+        h = pending.pop()
+        t = twin[h]
+        if cot_facing(h) + cot_facing(t) >= -1e-12:
+            continue
+        # h runs i -> j in triangle (i, j, k), h1 j -> k and h2 k -> i; its twin t
+        # runs j -> i in triangle (j, i, l), t1 i -> l and t2 l -> j
+        h1, h2, t1, t2 = following(h), preceding(h), following(t), preceding(t)
+        k, l_ = origin[h2], origin[t2]
+        ij, jk, ki, il, lj = length[h], length[h1], length[h2], length[t1], length[t2]
+        # the angles at i on either side of i -> j, added: the angle between i -> k and i -> l
+        angle = np.arccos(np.clip((ij * ij + ki * ki - jk * jk) / (2 * ij * ki), -1.0, 1.0))
+        angle += np.arccos(np.clip((ij * ij + il * il - lj * lj) / (2 * ij * il), -1.0, 1.0))
+        kl = np.sqrt(max(ki * ki + il * il - 2.0 * ki * il * np.cos(angle), 0.0))
+        # the two new triangles, (k, i, l) and (l, j, k), take the four outer halfedges
+        a, b = h - h % 3, t - t % 3
+        moved = {a: h2, a + 1: t1, b: t2, b + 1: h1}
+        saved = {slot: (origin[old], length[old], twin[old]) for slot, old in moved.items()}
+        for slot, (start, size, partner) in saved.items():
+            origin[slot], length[slot], twin[slot] = start, size, partner
+            twin[partner] = slot
+        origin[a + 2], origin[b + 2] = l_, k
+        length[a + 2] = length[b + 2] = kl
+        twin[a + 2], twin[b + 2] = b + 2, a + 2
+        pending.extend((a, a + 1, b, b + 1))
+    every = np.arange(origin.size)
+    ends = origin[every - every % 3 + (every + 1) % 3]
+    if not (np.array_equal(twin[twin], every) and np.array_equal(origin[twin], ends)):
+        raise RuntimeError("the edge flips left the triangulation inconsistent")  # pragma: no cover
+    return origin, length
+
+
+def laplace_beltrami_operator(vertices, faces) -> tuple[np.ndarray, np.ndarray]:
+    """The cotangent Laplacian of a closed triangle mesh and its lumped vertex areas.
+
+    Built on the mesh's intrinsic Delaunay triangulation (see
+    :func:`_intrinsic_delaunay`), so every edge weight is nonnegative and a
+    heat kernel built from it is too. Returns ``(stiffness, areas)``: the
+    dense ``(n, n)`` matrix ``C`` with ``C 1 = 0``, and each vertex's third of
+    the area of the triangles around it, which sum to the surface's area.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> v = np.array([[0, 0, 1], [1, 0, -1], [-1, 1, -1], [-1, -1, -1]], dtype=float)
+    >>> f = np.array([[0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]])
+    >>> C, areas = laplace_beltrami_operator(v, f)
+    >>> bool(np.allclose(C.sum(axis=1), 0)), bool((C - np.diag(np.diag(C)) <= 0).all())
+    (True, True)
+    """
+    points = np.asarray(vertices, dtype=np.float64)
+    corners = np.asarray(faces, dtype=np.int64)
+    if points.ndim != 2 or points.shape[1] != 3 or corners.ndim != 2 or corners.shape[1] != 3:
+        raise ValueError("a mesh is (n, 3) vertices and (m, 3) triangles")
+    n = points.shape[0]
+    origin, length = _intrinsic_delaunay(points, corners)
+    sides = length.reshape(-1, 3)
+    half = 0.5 * sides.sum(axis=1)
+    area = np.sqrt(
+        np.clip(half * (half - sides[:, 0]) * (half - sides[:, 1]) * (half - sides[:, 2]), 0, None)
+    )
+    if not (area > 0).all():
+        raise ValueError(f"{int((area <= 0).sum())} triangle(s) of the mesh have no area")
+    following, preceding = sides[:, [1, 2, 0]], sides[:, [2, 0, 1]]
+    cotangent = (following**2 + preceding**2 - sides**2) / (4.0 * area[:, None])
+    target = origin.reshape(-1, 3)[:, [1, 2, 0]].reshape(-1)
+    weight = np.zeros((n, n))
+    np.add.at(weight, (origin, target), 0.5 * cotangent.reshape(-1))
+    weight += weight.T
+    np.fill_diagonal(weight, 0.0)
+    stiffness = np.diag(weight.sum(axis=1)) - weight
+    areas = np.zeros(n)
+    np.add.at(areas, origin, np.repeat(area / 3.0, 3))
+    return stiffness, areas
+
+
+@lru_cache(maxsize=2)
+def _grid_basis(side: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The bundled white surface's Laplace-Beltrami eigenpairs for one hemisphere, read-only."""
+    from .surface import load_surface
+
+    part = load_surface("white").hemisphere(side)
+    stiffness, areas = laplace_beltrami_operator(part.vertices, part.faces)
+    scale = 1.0 / np.sqrt(areas)
+    # C phi = lambda M phi with M = diag(areas), as the symmetric problem M^-1/2 C M^-1/2
+    eigenvalues, vectors = np.linalg.eigh(stiffness * scale[:, None] * scale[None, :])
+    # the constant mode's eigenvalue is 0, and only rounding moves it
+    eigenvalues[np.abs(eigenvalues) < 1e-12 * eigenvalues.max()] = 0.0
+    eigenvectors = vectors * scale[:, None]
+    for array in (eigenvalues, eigenvectors, areas):
+        array.setflags(write=False)
+    return eigenvalues, eigenvectors, areas
+
+
+def laplace_beltrami_basis(hemisphere: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The grid's Laplace-Beltrami eigenpairs for one hemisphere: what ``rdk`` and ``matern`` use.
+
+    The bundled ico4 white surface's cotangent Laplacian, on its intrinsic
+    Delaunay triangulation (:func:`laplace_beltrami_operator`), solved in full:
+    ``C phi = lambda M phi`` with ``M`` the diagonal of lumped vertex areas, in
+    mm^2. Built once a session, in under half a minute for both hemispheres
+    on one core, and kept: 105 MB for both, shared and read-only.
+
+    Parameters
+    ----------
+    hemisphere
+        ``"L"`` or ``"R"``.
+
+    Returns
+    -------
+    tuple of ndarray
+        ``(eigenvalues, eigenvectors, areas)``: the 2,562 eigenvalues,
+        ascending, in mm^-2, the first 0; the eigenvectors as columns,
+        orthonormal under the areas (``Phi' diag(areas) Phi = I``), the first
+        constant; and the areas, which sum to the hemisphere's area.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> lam, phi, areas = laplace_beltrami_basis("L")      # doctest: +SKIP
+    >>> np.allclose(phi.T @ (areas[:, None] * phi), np.eye(lam.size))  # doctest: +SKIP
+    True
+    """
+    side = str(hemisphere).upper()
+    if side not in spec.HEMISPHERE_ORDER:
+        raise ValueError(f"hemisphere must be one of {spec.HEMISPHERE_ORDER}, got {hemisphere!r}")
+    return _grid_basis(side)
 
 
 NUM_HARMONICS = 33
@@ -482,7 +711,13 @@ def spherical_heat_kernel(
     cosine
         Cosines of the angle between points, any shape. Clipped to ``[-1, 1]``.
     sigma
-        Bandwidth, positive and finite. The released cohorts use 0.005.
+        Bandwidth, positive and finite: a diffusion time on the unit sphere.
+        The released cohorts use 0.005, where the kernel falls to half height
+        6.0 degrees from its centre and to zero at 12.2 degrees, about 7 and
+        15 mm on the white surface, which averages 1.2 mm a degree. Below
+        about 0.001 the 33 terms, not sigma, set the width: half height stays
+        at 3.6 to 4.0 degrees (3.96 at 0.001, 3.62 at 1e-5), so a smaller
+        sigma no longer makes the kernel narrower, and :func:`smooth` warns.
     harmonics
         Number of terms. ``concon`` hardcodes 33 -- see :data:`NUM_HARMONICS`.
     epsilon
@@ -857,13 +1092,15 @@ def read_concon_endpoints(path):
 
 
 def kappa_candidates(eigenvalues: np.ndarray, n: int = 10, index: int = 200) -> np.ndarray:
-    """Log-spaced bandwidths spanning the usable range of the spectrum.
+    """Log-spaced bandwidths spanning the usable range of the spectrum, the reference's way.
 
-    The range is the one the reference script derives: the low end is the
-    bandwidth at which the *highest* represented frequency is still damped only
-    to 0.9, and the high end the bandwidth at which the ``index``-th eigenvalue
-    is damped to 0.001. Below the low end the kernel barely smooths; above the
-    high end it has thrown away everything but the coarsest modes.
+    The low end is the bandwidth at which the *highest* represented frequency
+    is still damped only to 0.9, and the high end the bandwidth at which the
+    ``index``-th eigenvalue is damped to 0.001. Below the low end the kernel
+    barely smooths; above the high end it has thrown away everything but the
+    coarsest modes. ``rdk_smoothed_concon_compute.m`` smooths at the fourth of
+    ten; :func:`smooth` no longer does, since the highest frequency is the
+    mesh's rather than the cortex's (:data:`DEFAULT_KAPPA`).
 
     Examples
     --------
@@ -1334,14 +1571,18 @@ def smooth_endpoints(
     kernel_left: np.ndarray,
     kernel_right: np.ndarray,
 ) -> np.ndarray:
-    """Smooth endpoint counts into a density, as ``K A K`` per block.
+    """Smooth endpoint counts into a density, as ``K A K'`` per block.
 
     Returns the full ``(2 * n_per_hemi, 2 * n_per_hemi)`` symmetric density,
     left hemisphere first. It sums to one over the whole matrix.
 
-    Negative entries produced by spectral truncation are clipped to zero, and
-    the normalizing constant is formed from the positive entries only, exactly
-    as in ``rdk_smoothed_concon_compute.m``.
+    Negative entries are clipped to zero, and the normalizing constant is
+    formed from the positive entries only, exactly as in
+    ``rdk_smoothed_concon_compute.m``: handed the reference's kernels, this is
+    the reference. :func:`smooth` hands it the grid's own kernels, each column
+    scaled to unit mass (:func:`kernel_matrices`): nonnegative, so that there
+    the clip removes nothing, and no longer symmetric, so that the transpose
+    matters.
     """
     a11, a22, a12 = endpoints.adjacency()
     n = endpoints.n_per_hemi
@@ -1349,14 +1590,29 @@ def smooth_endpoints(
     for name, kernel in (("kernel_left", kernel_left), ("kernel_right", kernel_right)):
         if kernel.shape != (n, n):
             raise ValueError(f"{name} has shape {kernel.shape}, expected {(n, n)}")
+        if not np.isfinite(kernel).all():
+            raise ValueError(f"{name} is not finite: the kernel's settings overflow it")
+    if endpoints.n_streamlines == 0:
+        raise ValueError("there are no streamlines to smooth: the endpoints are empty")
 
-    im11 = kernel_left @ a11 @ kernel_left
-    im22 = kernel_right @ a22 @ kernel_right
-    im12 = kernel_left @ a12 @ kernel_right
+    # K A K', which the reference writes K A K: its kernels are symmetric, and a kernel
+    # whose columns are scaled to unit mass is not
+    im11 = kernel_left @ a11 @ kernel_left.T
+    im22 = kernel_right @ a22 @ kernel_right.T
+    im12 = kernel_left @ a12 @ kernel_right.T
 
     total = im11[im11 > 0].sum() + im22[im22 > 0].sum() + 2.0 * im12[im12 > 0].sum()
+    if not np.isfinite(total):
+        raise ValueError(
+            "the smoothed intensity is not finite: the kernel's values are too large to "
+            "multiply; the kernel's settings, not the endpoints, are the cause"
+        )
     if total <= 0:
-        raise ValueError("smoothed intensity has no positive mass; check the endpoints")
+        raise ValueError(
+            "the smoothed intensity has no positive mass: the kernel is zero everywhere, or "
+            "negative, where the endpoints are; the kernel's settings, not the endpoints, are "
+            "the cause"
+        )
 
     density = np.zeros((2 * n, 2 * n), dtype=np.float64)
     density[:n, :n] = np.where(im11 > 0, im11 / total, 0.0)
@@ -1368,18 +1624,30 @@ def smooth_endpoints(
 
 
 def load_eigenpairs(path, hemisphere: str) -> tuple[np.ndarray, np.ndarray]:
-    """Read ``EV_LBO_ds_ico4_{L,R}.mat`` and return ``(eigenvalues, eigenvectors)``."""
+    """Read ``EV_LBO_ds_ico4_{L,R}.mat`` and return ``(eigenvalues, eigenvectors)``.
+
+    A file that cannot be read, or holds other variables, is refused with its
+    path and the way to fetch the SBCI_Toolkit's copy again, ``sbci basis
+    --force``: an empty or cut file raised SciPy's own error, naming neither.
+    """
     import scipy.io
 
     hemisphere = hemisphere.upper()
     if hemisphere not in ("L", "R"):
         raise ValueError(f"hemisphere must be 'L' or 'R', got {hemisphere!r}")
 
-    data = scipy.io.loadmat(path)
+    again = "if it is the SBCI_Toolkit's basis, fetch it again with `sbci basis --force`"
+    try:
+        data = scipy.io.loadmat(path)
+    except Exception as error:  # an empty, cut or foreign file fails in many ways
+        raise FormatError(
+            f"{path} cannot be read as a MATLAB file ({type(error).__name__}: {error}): it is "
+            f"damaged or not the Laplace-Beltrami basis; {again}"
+        ) from None
     lam_key, vec_key = f"Lambda_{hemisphere}", f"U_{hemisphere}"
     if lam_key not in data or vec_key not in data:
         available = [k for k in data if not k.startswith("__")]
-        raise FormatError(f"{path} has no {lam_key}/{vec_key}; it has {available}")
+        raise FormatError(f"{path} has no {lam_key}/{vec_key}; it has {available}; {again}")
 
     eigenvalues = np.asarray(data[lam_key], dtype=np.float64).ravel()
     eigenvectors = np.asarray(data[vec_key], dtype=np.float64)
@@ -1399,6 +1667,12 @@ _NO_ENDPOINTS = (
     "endpoints=... before saving."
 )
 
+_NOT_STRUCTURAL = (
+    "Only a structural connectome can be re-smoothed, from the streamline endpoints "
+    "it carries; this one is {modality!r}, and a functional connectome has no "
+    "streamlines to smooth."
+)
+
 _NO_POSITIONS = (
     "The spherical kernel smooths from where each streamline actually crossed "
     "the surface, so it needs the barycentric coordinates in the /endpoints "
@@ -1407,24 +1681,22 @@ _NO_POSITIONS = (
     "rh_sphere), which keeps them, or pass kernel='rdk'."
 )
 
-_NO_EIGENPAIRS = (
-    "The {kernel} kernel needs the Laplace-Beltrami basis for the grid, "
-    "EV_LBO_ds_ico4_L.mat and EV_LBO_ds_ico4_R.mat, 50 MB per hemisphere, which "
-    "smooth() fetches from SBCI_Toolkit the first time; here it found none, and "
-    "fetching them failed: {error}. Run `sbci basis` where the network can be "
-    "reached (on a cluster, a login node), or pass eigenpairs= as the directory "
-    "holding the two files, or as a pair of (eigenvalues, eigenvectors) tuples "
-    "for left and right, or point SBCI_LBO_DIR at that directory. The files are "
-    "a property of the grid rather than of the subject, so they are not bundled "
-    "-- and recomputing them from the bundled white surface reproduces the "
-    "reference kernel only to r = 0.94, which is not close enough to substitute."
-)
-
 EIGENPAIR_FILES = ("EV_LBO_ds_ico4_L.mat", "EV_LBO_ds_ico4_R.mat")
-"""What :func:`smooth` looks for when ``eigenpairs`` names a directory."""
+"""The SBCI_Toolkit's basis files: what :func:`find_basis` looks for, and what
+``eigenpairs=`` reads when it names a directory."""
 
 EIGENPAIR_ENV = "SBCI_LBO_DIR"
-"""Environment variable naming the directory that holds the basis."""
+"""Environment variable naming the directory that holds the SBCI_Toolkit's basis."""
+
+SIGNED_LIMIT = 1e-3
+"""The share of a kernel's weight that may be negative before :func:`smooth` warns.
+
+The grid's own basis gives 1e-13, rounding; the SBCI_Toolkit's gives 0.37 at
+the reference's bandwidth and 0.04 at 18.9 mm (A2-02)."""
+
+SHK_WIDTH_FLOOR = 0.001
+"""The ``sigma`` below which :func:`smooth` warns that the 33 terms, not
+``sigma``, set the spherical kernel's width (:func:`spherical_heat_kernel`)."""
 
 
 def _candidate_basis_directories():
@@ -1442,51 +1714,78 @@ def _candidate_basis_directories():
     return candidates
 
 
-def find_basis():
-    """The Laplace-Beltrami basis directory, or ``None`` if nowhere obvious.
+@lru_cache(maxsize=8)
+def _file_digest(path: str, size: int, modified: int) -> str:
+    """SHA-256 of a file, kept while its size and time stamp stay the same."""
+    from pathlib import Path
 
-    The basis is 50 MB per hemisphere and describes the grid rather than any
-    subject, so it is neither bundled in the wheel nor copied into every file.
-    Rather than force every caller to pass a path, :func:`smooth` looks in a
-    few conventional places first, and fetches it into the first place it can
-    (:func:`sbci.download.fetch_basis`) when it is in none; set ``SBCI_LBO_DIR``
-    to make the place explicit.
-    """
-    for directory in _candidate_basis_directories():
-        if all((directory / name).is_file() for name in EIGENPAIR_FILES):
-            return directory
+    from .download import sha256_of
+
+    return sha256_of(Path(path))
+
+
+def _digest(path) -> str:
+    """SHA-256 of a basis file, read once while it is unchanged."""
+    status = path.stat()
+    return _file_digest(str(path), status.st_size, status.st_mtime_ns)
+
+
+def _basis_problem(path) -> str | None:
+    """Why a basis file is not the SBCI_Toolkit's, or ``None`` if its size and SHA-256 are."""
+    from .download import BASIS_FILES
+
+    size, digest = BASIS_FILES[path.name]
+    found = path.stat().st_size
+    if found != size:
+        return f"{path} is {found:,} bytes, not the {size:,} of the SBCI_Toolkit's"
+    actual = _digest(path)
+    if actual != digest:
+        return f"{path} has SHA-256 {actual[:16]}..., not the SBCI_Toolkit's {digest[:16]}..."
     return None
 
 
-def _fetch_basis(kernel):
-    """The basis fetched where :func:`find_basis` will find it again, or why it could not be."""
-    import sys
+def find_basis():
+    """The folder holding the SBCI_Toolkit's Laplace-Beltrami basis, checked, or ``None``.
 
-    from .download import basis_dir, fetch_basis
+    :func:`smooth` does not need it: ``rdk`` and ``matern`` build the grid's
+    own basis (:func:`laplace_beltrami_basis`). The toolkit's files,
+    ``EV_LBO_ds_ico4_L.mat`` and ``EV_LBO_ds_ico4_R.mat``, 50 MB a hemisphere,
+    are what the MATLAB smoothed with, and serve comparisons with it;
+    ``sbci basis`` fetches them. This looks in ``$SBCI_LBO_DIR``,
+    ``$SBCI_TOOLKIT/concon_estimate``, ``~/.cache/sbci/lbo`` and
+    ``~/.sbci/lbo``, in that order, and returns the first folder holding both
+    files at the size and SHA-256 that :data:`sbci.download.BASIS_FILES` pins.
 
-    def say(line):
-        print(line, file=sys.stderr, flush=True)
-
-    say(
-        f"The {kernel} kernel needs the grid's Laplace-Beltrami basis, which is not here yet: "
-        f"fetching it once, 100 MB, into {basis_dir()}"
-    )
-    try:
-        return fetch_basis(report=say)
-    except OSError as error:
-        searched = "\n  ".join(str(d) for d in _candidate_basis_directories())
+    Raises
+    ------
+    MissingDataError
+        When the only files found are damaged or not the toolkit's. It names
+        each, and the fix: ``sbci basis --force``.
+    """
+    damaged = []
+    for directory in _candidate_basis_directories():
+        paths = [directory / name for name in EIGENPAIR_FILES]
+        if not all(path.is_file() for path in paths):
+            continue
+        problems = [problem for path in paths if (problem := _basis_problem(path))]
+        if not problems:
+            return directory
+        damaged.extend(problems)
+    if damaged:
         raise MissingDataError(
-            _NO_EIGENPAIRS.format(kernel=kernel, error=error)
-            + f"\n\nLooked for {EIGENPAIR_FILES[0]} and {EIGENPAIR_FILES[1]} in:"
-            f"\n  {searched}"
-        ) from None
+            "The Laplace-Beltrami basis files found are damaged, or not the SBCI_Toolkit's: "
+            + "; ".join(damaged)
+            + ". Fetch them again with `sbci basis --force`."
+        )
+    return None
 
 
 def _resolve_eigenpairs(eigenpairs):
     """Accept a directory of MATLAB files or a pair of arrays; return both."""
+    import os
     from pathlib import Path
 
-    if isinstance(eigenpairs, (str, Path)):
+    if isinstance(eigenpairs, (str, os.PathLike)):
         base = Path(eigenpairs)
         if not base.is_dir():
             raise NotADirectoryError(
@@ -1503,13 +1802,140 @@ def _resolve_eigenpairs(eigenpairs):
         (lam_left, vec_left), (lam_right, vec_right) = eigenpairs
     except (TypeError, ValueError) as error:
         raise TypeError(
-            "eigenpairs= should be a directory, or a pair of "
+            "eigenpairs= should be None, a directory, or a pair of "
             "(eigenvalues, eigenvectors) tuples for left and right"
         ) from error
     return (
         (np.asarray(lam_left, dtype=np.float64).ravel(), np.asarray(vec_left, dtype=np.float64)),
         (np.asarray(lam_right, dtype=np.float64).ravel(), np.asarray(vec_right, dtype=np.float64)),
     )
+
+
+def _basis(eigenpairs):
+    """``(left, right, which)``: the eigenpairs ``rdk`` and ``matern`` use, and a line naming them.
+
+    The line goes into the result's provenance: the grid's own basis, or the
+    SHA-256 of each file read, or of the arrays passed.
+    """
+    import hashlib
+    import os
+    from pathlib import Path
+
+    if eigenpairs is None:
+        left, right = (laplace_beltrami_basis(side)[:2] for side in spec.HEMISPHERE_ORDER)
+        return left, right, "basis the grid's own Laplace-Beltrami eigenpairs"
+    left, right = _resolve_eigenpairs(eigenpairs)
+    if isinstance(eigenpairs, (str, os.PathLike)):
+        files = ", ".join(
+            f"{name} sha256 {_digest(Path(eigenpairs) / name)}" for name in EIGENPAIR_FILES
+        )
+        return left, right, f"basis {files}"
+    digest = hashlib.sha256()
+    for array in (*left, *right):
+        digest.update(np.ascontiguousarray(array, dtype=np.float64).tobytes())
+    return left, right, f"basis eigenpairs passed as arrays, sha256 {digest.hexdigest()}"
+
+
+def _settings(kernel: str, bandwidth: float, nu: float | None = None) -> str:
+    """The kernel's settings, as an error message names them."""
+    return f"kernel={kernel!r}, bandwidth={bandwidth:g}" + ("" if nu is None else f", nu={nu:g}")
+
+
+def kernel_matrices(kernel="rdk", bandwidth=None, area=None, eigenpairs=None, nu=None):
+    """The two kernel matrices :func:`smooth` applies for ``rdk`` and ``matern``: ``(left, right)``.
+
+    Column ``j`` of each is the bump an endpoint at vertex ``j`` of that
+    hemisphere spreads over it, scaled to integrate to one under ``area``:
+    ``K / (area @ K)``, so ``area @ K`` is 1 in every column, and every
+    streamline end carries the same mass wherever it lands.
+
+    Parameters
+    ----------
+    kernel
+        ``"rdk"`` or ``"matern"``.
+    bandwidth
+        ``kappa``, in mm on the white surface; :data:`DEFAULT_KAPPA` if
+        ``None``.
+    area
+        Per-vertex weights over the whole grid, left hemisphere first: a
+        file's ``area``. By default the format's own, counts of fsaverage
+        vertices per grid vertex (57 to 68).
+    eigenpairs
+        ``None``, the default, for the grid's own basis
+        (:func:`laplace_beltrami_basis`); or a directory of the SBCI_Toolkit's
+        files, or a pair of ``(eigenvalues, eigenvectors)`` tuples, as
+        :func:`smooth` takes them.
+    nu
+        The Matern smoothness, :data:`DEFAULT_NU` if ``None``; ``matern`` only.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> left, right = kernel_matrices("rdk")                      # doctest: +SKIP
+    >>> from sbci.io.cifti import vertex_areas
+    >>> bool(np.allclose(vertex_areas()[1][:2562] @ left, 1.0))  # doctest: +SKIP
+    True
+    """
+    if kernel not in ("rdk", "matern"):
+        raise ValueError(f"kernel must be 'rdk' or 'matern', got {kernel!r}")
+    bandwidth = DEFAULT_KAPPA[kernel] if bandwidth is None else _positive("bandwidth", bandwidth)
+    if nu is not None and kernel != "matern":
+        raise ValueError(f"nu is the Matern kernel's smoothness, and kernel={kernel!r} has none")
+    if kernel == "matern":
+        nu = DEFAULT_NU if nu is None else _positive("nu", nu)
+    left, right, _ = _basis(eigenpairs)
+    return _kernel_pair(kernel, bandwidth, area, left, right, nu)
+
+
+def _kernel_pair(kernel, bandwidth, area, left, right, nu=None):
+    """Both hemispheres' kernels, each column scaled to unit mass under ``area``; checked."""
+    if area is None:
+        from .io.cifti import vertex_areas
+
+        area = vertex_areas()[1]
+    area = np.asarray(area, dtype=np.float64).ravel()
+    sizes = [np.shape(vectors)[0] for _, vectors in (left, right)]
+    if area.size != sum(sizes):
+        raise ValueError(
+            f"{area.size} vertex weights for a basis of {sizes[0]} + {sizes[1]} vertices"
+        )
+    settings = _settings(kernel, bandwidth, nu)
+    build = diffusion_kernel if kernel == "rdk" else partial(matern_kernel, nu=nu)
+    pair, negative, total = [], 0.0, 0.0
+    for side, (eigenvalues, eigenvectors), weights in (
+        ("left", left, area[: sizes[0]]),
+        ("right", right, area[sizes[0] :]),
+    ):
+        matrix = build(eigenvalues, eigenvectors, bandwidth)
+        if not np.isfinite(matrix).all():
+            raise ValueError(
+                f"at {settings} the {side} hemisphere's kernel is not finite; the settings, not "
+                "the endpoints, are the cause"
+            )
+        mass = weights @ matrix
+        empty = ~(mass > 0)
+        if empty.any():
+            raise ValueError(
+                f"at {settings} the kernel is zero everywhere, or negative overall, for "
+                f"{int(empty.sum())} of the {side} hemisphere's {mass.size} vertices: an endpoint "
+                "there would carry no mass. The settings or the basis, not the endpoints, are the "
+                "cause"
+            )
+        matrix /= mass[np.newaxis, :]
+        negative -= float((weights @ np.minimum(matrix, 0.0)).sum())
+        total += float((weights @ np.abs(matrix)).sum())
+        pair.append(matrix)
+    if total > 0 and negative / total > SIGNED_LIMIT:
+        warnings.warn(
+            f"at {settings}, {negative / total:.1%} of the kernel's weight is negative, so it is "
+            "not a smoothing kernel, and the density is clipped at zero. A basis orthonormal "
+            "under the surface's vertex areas, as a Laplace-Beltrami basis is, makes none; the "
+            "SBCI_Toolkit's EV_LBO_ds_ico4 files are not one, and eigenpairs=None builds the "
+            "grid's own",
+            UserWarning,
+            stacklevel=3,
+        )
+    return pair[0], pair[1]
 
 
 def _positive(name: str, value) -> float:
@@ -1537,41 +1963,60 @@ def smooth(
     progress=None,
     nu: float | None = None,
 ):
-    """Re-smooth a connectome from its stored endpoints.
+    """Re-smooth a structural connectome from its stored streamline endpoints.
 
     Returns a new connectome of the same type, carrying the same endpoints,
     mask, areas and coordinates, with ``kernel``, ``bandwidth`` (and ``nu``
     for ``matern``) and the streamline count in its metadata set to what was
-    actually used: a half of a subject's streamlines records its own count.
+    actually used -- a half of a subject's streamlines records its own count --
+    and its provenance saying how it was re-smoothed.
 
-    :func:`smooth_endpoints` normalizes its density to sum to one over the
-    whole matrix, diagonal included. This renormalizes to the package's
-    convention instead -- ``area @ D @ area == 1`` with the diagonal dropped --
-    so that the result satisfies the same unit-mass check as a file read from
-    disk. The two differ by the self-connectivity the storage format excludes.
+    The density is normalized to the package's convention, ``area @ D @ area
+    == 1`` with the diagonal dropped, so that the result satisfies the same
+    unit-mass check as a file read from disk. ``area``, the format's weight per
+    vertex, is a count of fsaverage vertices, 57 to 68 a grid vertex
+    (SPEC_QUESTIONS.md item 3), not a surface area. ``rdk`` and ``matern``
+    scale each endpoint's kernel to unit mass under these counts. ``shk``
+    integrates its kernel as ``concon`` did, so under them the mass a
+    streamline end receives depends on where it lands: averaged over each
+    Desikan region it runs from 0.918 to 1.035, where the sphere's own vertex
+    areas would give 0.996 to 1.003.
 
     Parameters
     ----------
     connectome
-        A :class:`~sbci.ContinuousConnectome` carrying endpoints.
+        A structural :class:`~sbci.ContinuousConnectome` carrying endpoints.
     kernel
         One of :data:`KERNELS`.
     bandwidth
-        ``sigma`` for ``shk``, defaulting to :data:`DEFAULT_SIGMA`; ``kappa``
-        for ``rdk`` and ``matern``, defaulting to the value the reference
-        selection formula picks, ``kappa_candidates(eigenvalues)[3]``. A
-        positive finite number; a NumPy float counts as the decimal it prints
-        as, so ``np.float32(0.005)`` is smoothed and recorded as 0.005.
+        For ``shk``, ``sigma``, a diffusion time on the unit sphere, by
+        default :data:`DEFAULT_SIGMA`, 0.005: the kernel falls to half height
+        6.0 degrees from an endpoint and to zero at 12.2 degrees, about 7 and
+        15 mm on the white surface. Below 0.001 the 33-term series, not
+        ``sigma``, sets the width, and a warning says so. For ``rdk`` and
+        ``matern``, ``kappa``, in mm on the white surface, by default
+        :data:`DEFAULT_KAPPA`, where each smooths at ``shk``'s default scale.
+        A positive finite number; a NumPy float counts as the decimal it
+        prints as, so ``np.float32(0.005)`` is smoothed and recorded as 0.005.
     eigenpairs
-        Directory holding the Laplace-Beltrami basis, or a pair of
-        ``(eigenvalues, eigenvectors)`` tuples. Without it the basis is looked
-        for where :func:`find_basis` looks, and fetched there once, 100 MB from
-        the SBCI group's SBCI_Toolkit, if it is in none of them.
+        The basis ``rdk`` and ``matern`` use. ``None``, the default, builds
+        the grid's own (:func:`laplace_beltrami_basis`), under half a minute
+        once a session, with nothing to download. A directory
+        holding the SBCI_Toolkit's ``EV_LBO_ds_ico4_L.mat`` and
+        ``EV_LBO_ds_ico4_R.mat``, or a pair of ``(eigenvalues,
+        eigenvectors)`` tuples for left and right, is used as given and named
+        in the provenance by its SHA-256; one that makes a signed kernel, as
+        the toolkit's does, draws a warning.
     mask_medial_wall
-        ``False``, the default, leaves whatever mass the kernel put on the
-        medial wall, as both references do. ``True`` zeroes it before the
-        unit-mass normalization so the result satisfies the format's mask rule
-        and ``sbci validate`` -- SPEC_QUESTIONS.md item 14.
+        ``False``, the default, leaves what the kernel put on the medial wall,
+        as both references do; such a connectome saves, but fails
+        ``sbci validate``'s mask check. ``True`` zeroes the wall's rows and
+        columns before the unit-mass normalization, so that the result
+        satisfies the format's mask rule and ``sbci validate``, as every
+        released file does -- SPEC_QUESTIONS.md item 14. It does not drop the
+        streamlines that end on the wall: their kernels still reach the cortex
+        nearby, and with ``shk`` an end on the wall keeps 12% of its mass there
+        on average.
     progress
         Optional ``progress(done, total)`` callable, called after each block of
         endpoints for the ``shk`` kernel.
@@ -1579,6 +2024,14 @@ def smooth(
         The Matern kernel's smoothness, a positive number, recorded in the
         metadata as ``nu``; ``None`` means :data:`DEFAULT_NU`, the reference
         script's 3 (it names 1, 2 and 3). Only ``matern`` takes it.
+
+    Raises
+    ------
+    ValueError
+        For a functional connectome, which has no streamlines; and for kernel
+        settings that make no usable kernel, naming them.
+    MissingDataError
+        For a connectome without endpoints.
     """
     if kernel not in KERNELS:
         raise ValueError(f"kernel must be one of {KERNELS}, got {kernel!r}")
@@ -1591,17 +2044,23 @@ def smooth(
                 f"got nu={nu!r}"
             )
         nu = _positive("nu", nu)
+    metadata = getattr(connectome, "metadata", None)
+    modality = getattr(metadata, "modality", "sc")
+    if modality != "sc":
+        raise ValueError(_NOT_STRUCTURAL.format(modality=modality))
     if getattr(connectome, "endpoints", None) is None:
         raise MissingDataError(_NO_ENDPOINTS)
-    modality = getattr(getattr(connectome, "metadata", None), "modality", "sc")
-    if modality != "sc":
-        raise ValueError(
-            f"smooth() re-smooths a structural connectome's streamline endpoints; this one is "
-            f"{modality!r}, whose density would come back labelled {modality!r}"
-        )
 
     if kernel == "shk":
         sigma = DEFAULT_SIGMA if bandwidth is None else bandwidth
+        if sigma < SHK_WIDTH_FLOOR:
+            warnings.warn(
+                f"sigma {sigma:g} is below {SHK_WIDTH_FLOOR:g}, where the spherical kernel's 33 "
+                "terms, not sigma, set its width: its half height stays 3.6 to 4.0 degrees from "
+                "the endpoint, so a smaller sigma no longer makes it narrower",
+                UserWarning,
+                stacklevel=3,
+            )
         vertices = _grid_vertices(connectome)  # off ico4 refused first: positions are on its sphere
         points_in, points_out = endpoint_positions(connectome.endpoints)
         from .grid import hemisphere_labels
@@ -1619,25 +2078,14 @@ def smooth(
         apply_final_threshold(density, points_in.shape[0])
         return _finish(connectome, density, kernel, sigma, mask_medial_wall)
 
-    if eigenpairs is None:
-        eigenpairs = find_basis()
-    if eigenpairs is None:
-        eigenpairs = _fetch_basis(kernel)
-
-    (lam_left, vec_left), (lam_right, vec_right) = _resolve_eigenpairs(eigenpairs)
+    left, right, which = _basis(eigenpairs)
     if bandwidth is None:
-        bandwidth = float(kappa_candidates(lam_left)[3])
-
+        bandwidth = DEFAULT_KAPPA[kernel]
     if kernel == "matern" and nu is None:
         nu = DEFAULT_NU
-    build = diffusion_kernel if kernel == "rdk" else partial(matern_kernel, nu=nu)
-    density = smooth_endpoints(
-        connectome.endpoints,
-        build(lam_left, vec_left, bandwidth),
-        build(lam_right, vec_right, bandwidth),
-    )
-
-    return _finish(connectome, density, kernel, bandwidth, mask_medial_wall, nu)
+    kernel_left, kernel_right = _kernel_pair(kernel, bandwidth, connectome.area, left, right, nu)
+    density = smooth_endpoints(connectome.endpoints, kernel_left, kernel_right)
+    return _finish(connectome, density, kernel, bandwidth, mask_medial_wall, nu, which)
 
 
 def apply_final_threshold(
@@ -1691,22 +2139,32 @@ def _finish(
     bandwidth: float,
     mask_medial_wall: bool = False,
     nu: float | None = None,
+    basis: str | None = None,
 ):
     """Normalize a re-smoothed density and wrap it back into a connectome.
 
     ``nu`` is recorded for the Matern kernel, :data:`DEFAULT_NU` if not given;
-    any other kernel leaves the key out, whatever the connectome carried.
+    any other kernel leaves the key out, whatever the connectome carried. The
+    provenance is rewritten to say how the density was made (:func:`_provenance`),
+    ``basis`` naming the basis ``rdk`` and ``matern`` used. A density that is
+    not finite, or carries no positive mass, is refused with the kernel's
+    settings, before anything could save it.
     """
     from .grid import to_condensed
     from .metadata import Metadata
 
-    # The medial wall is NOT zeroed by default. Neither reference masks: c3_main's
-    # own released output puts 0.87% of its mass on the wall, and the MATLAB rdk
-    # density does too, so masking by default would make this method diverge from
-    # both and `test_smooth_method_matches_matlab` would stop holding. It does
-    # mean a re-smoothed density can fail the validator's mask check -- a genuine
-    # conflict between the format and the reference, SPEC_QUESTIONS.md item 14.
-    # `mask_medial_wall=True` is the caller's way to choose the format's side.
+    if kernel == "matern" and nu is None:
+        nu = DEFAULT_NU
+    settings = _settings(kernel, bandwidth, nu if kernel == "matern" else None)
+    if not np.isfinite(density).all():
+        raise ValueError(
+            f"at {settings} the smoothed density is not finite; the settings, not the endpoints, "
+            "are the cause"
+        )
+    # The medial wall is NOT zeroed by default. Neither reference masks -- c3_main's
+    # own output and the MATLAB rdk density both leave mass there -- and the default
+    # follows them, though a re-smoothed density can then fail the validator's mask
+    # check: SPEC_QUESTIONS.md item 14. `mask_medial_wall=True` takes the format's side.
     if mask_medial_wall:
         wall = ~np.asarray(connectome.mask, dtype=bool)
         density[wall, :] = 0.0
@@ -1719,17 +2177,24 @@ def _finish(
     np.fill_diagonal(density, 0.0)
     area = np.asarray(connectome.area, dtype=np.float64)
     mass = float(area @ density @ area)
-    if mass <= 0:
-        raise ValueError("the re-smoothed density has no positive area-weighted mass")
+    if not (mass > 0 and np.isfinite(mass)):
+        where = " once the medial wall is zeroed" if mask_medial_wall else ""
+        raise ValueError(
+            f"at {settings} the smoothed density has no positive mass under the file's vertex "
+            f"weights (counts of fsaverage vertices){where}"
+        )
     density /= mass
 
     fields = copy.deepcopy(connectome.metadata.fields)  # not sharing its lists with the input
     fields.update(kernel=kernel, bandwidth=float(bandwidth), normalization="unit-mass")
     fields.pop("nu", None)
     if kernel == "matern":
-        fields["nu"] = float(DEFAULT_NU if nu is None else nu)
+        fields["nu"] = float(nu)
     if getattr(connectome, "endpoints", None) is not None:
         fields["streamline_count"] = int(connectome.endpoints.n_streamlines)
+    fields["provenance"] = _provenance(
+        fields.get("provenance"), kernel, bandwidth, nu if kernel == "matern" else None, basis
+    )
     return type(connectome)(
         data=to_condensed(density).astype(np.float32),
         area=connectome.area,
@@ -1738,3 +2203,46 @@ def _finish(
         coords=connectome.coords,
         endpoints=connectome.endpoints,
     )
+
+
+_SMOOTHED = re.compile(r"(?:re-)?smoothed by sbci\b[^;]*")
+"""A provenance's clause on how its density was smoothed, up to the next semicolon."""
+
+
+def _provenance(previous, kernel, bandwidth, nu=None, basis=None) -> str:
+    """The provenance of a smoothed connectome: what it said, with the smoothing restated.
+
+    A released file's provenance says how it was smoothed; that clause is
+    replaced, rather than left beside another kernel's (A2-09), and one is
+    added where there was none. A connectome with no provenance yet, such as
+    one :func:`sbci.example` builds, is smoothed for the first time.
+
+    Examples
+    --------
+    >>> old = "HCP Young Adult sub-x; smoothed by sbci (kernel shk, bandwidth 0.005); built"
+    >>> print(_provenance(old, "rdk", 5.5))
+    HCP Young Adult sub-x; re-smoothed by sbci ... from its stored endpoints
+    (kernel rdk, bandwidth 5.5); built
+    """
+    from . import __version__
+
+    details = f"kernel {kernel}, bandwidth {bandwidth:g}"
+    if nu is not None:
+        details += f", nu {nu:g}"
+    if basis:
+        details += f", {basis}"
+    clause = f"re-smoothed by sbci {__version__} from its stored endpoints ({details})"
+    text = "" if previous is None else str(previous).strip()
+    if not text:
+        return f"smoothed by sbci {__version__} from its endpoints ({details})"
+    if not _SMOOTHED.search(text):
+        return f"{text}; {clause}"
+    parts = [part.strip() for part in text.split(";")]
+    kept, placed = [], False
+    for part in parts:
+        if _SMOOTHED.search(part):
+            if placed:
+                continue
+            part, placed = _SMOOTHED.sub(lambda _match: clause, part, count=1), True
+        kept.append(part)
+    return "; ".join(part for part in kept if part)

@@ -355,43 +355,46 @@ class ContinuousConnectome:
         nu: float | None = None,
         **kwargs: Any,
     ):
-        """Re-smooth from the stored endpoints, in congruence form ``K A K^T``.
+        """Re-smooth a structural connectome from its stored endpoints.
 
-        Extra keyword arguments -- ``mask_medial_wall``, ``progress`` -- pass
-        through to :func:`sbci.smoothing.smooth`.
+        Only a structural connectome can be re-smoothed: a functional one has
+        no streamlines. Extra keyword arguments -- ``mask_medial_wall`` and
+        ``progress`` -- pass through to :func:`sbci.smoothing.smooth`.
 
         Returns a new :class:`ContinuousConnectome` carrying the same endpoints
         and metadata, with ``kernel`` and ``bandwidth`` (and ``nu`` for
-        ``matern``) updated to what was used, so a re-smoothed file still says
-        how it was made.
+        ``matern``) updated to what was used, and its provenance saying it was
+        re-smoothed, so a re-smoothed file still says how it was made.
 
         Parameters
         ----------
         kernel
-            One of :data:`sbci.smoothing.KERNELS`. The default is the spherical
-            heat kernel, which is what the released cohorts use; see
-            SPEC_QUESTIONS.md item 10 for the decision and what each name means.
+            One of :data:`sbci.smoothing.KERNELS`. The default, ``shk``, is the
+            spherical kernel ``concon`` applies, which is what the released
+            cohorts use; see SPEC_QUESTIONS.md item 10 for the decision and
+            what each name means.
         bandwidth
-            ``sigma`` for ``shk`` (default 0.005, the released cohorts' value);
-            ``kappa`` for ``rdk`` and ``matern``, defaulting to the value the
-            reference selection formula picks from the spectrum.
+            ``sigma`` for ``shk``, a diffusion time on the unit sphere (default
+            0.005, the released cohorts' value); ``kappa`` for ``rdk`` and
+            ``matern``, in mm on the white surface, by default the value at
+            which each smooths at ``shk``'s default scale
+            (:data:`sbci.smoothing.DEFAULT_KAPPA`).
         eigenpairs
-            Where to get the Laplace-Beltrami basis: a directory holding
-            ``EV_LBO_ds_ico4_L.mat`` and ``EV_LBO_ds_ico4_R.mat``, or a pair of
-            ``(eigenvalues, eigenvectors)`` tuples for left and right. Needed
-            by ``rdk`` and ``matern``; the files are 50 MB per hemisphere and
-            belong to the grid rather than the subject, so they are not
-            bundled. Left out, the basis is looked for where
-            :func:`sbci.smoothing.find_basis` looks, and fetched there once
-            from SBCI_Toolkit if it is in none of them (``sbci basis`` fetches
-            it ahead).
+            The Laplace-Beltrami basis ``rdk`` and ``matern`` use. Left out, the
+            grid's own is built from the bundled white surface, with nothing
+            to download (:func:`sbci.smoothing.laplace_beltrami_basis`). A
+            directory holding the SBCI_Toolkit's ``EV_LBO_ds_ico4_L.mat`` and
+            ``EV_LBO_ds_ico4_R.mat`` (``sbci basis`` fetches them), or a pair
+            of ``(eigenvalues, eigenvectors)`` tuples for left and right, is
+            used instead, for comparisons with the MATLAB; the toolkit's makes
+            a signed kernel, and a warning says so.
         nu
             The Matern kernel's smoothness, 3 by default as in the reference
             script; only ``matern`` takes it.
 
         Examples
         --------
-        >>> resmoothed = sc.smooth(kernel="rdk", eigenpairs="/path/to/lbo")  # doctest: +SKIP
+        >>> resmoothed = sc.smooth(kernel="rdk")   # doctest: +SKIP
         """
         from .smoothing import smooth as _smooth
 

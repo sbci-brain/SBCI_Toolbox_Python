@@ -5,8 +5,13 @@
 Tier 4 asserts these against tolerances and prints nothing when they hold; this prints what it
 compares, on the toolkit's example subject (PORTING.md item 24 quotes it): the Riemannian
 kernel and the density ``smooth_endpoints`` builds from the endpoints, the ``smooth()`` method
-on a file carrying them (with its diagonal and unit mass), and the bandwidth ``smooth()``
-takes when given none. The paths are those of ``tests/test_matlab_reference.py``.
+on a file carrying them (with its diagonal and unit mass), and the bandwidth the reference's
+selection formula picks. The paths are those of ``tests/test_matlab_reference.py``, and the
+file carrying the endpoints is found in ``$SBCI_EXAMPLE_SC``.
+
+``smooth()`` corrects the MATLAB in two steps, which are taken back out here as in
+``test_smooth_method_matches_matlab``: it scales each kernel column to unit mass under the
+file's weights (A2-03), and it masks the medial wall by default.
 """
 
 import pathlib
@@ -16,7 +21,7 @@ import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import test_matlab_reference as tier4  # noqa: E402
-from sbci import ContinuousConnectome  # noqa: E402
+from sbci import ContinuousConnectome, smoothing  # noqa: E402
 from sbci.smoothing import (  # noqa: E402
     Endpoints,
     diffusion_kernel,
@@ -58,9 +63,7 @@ compared(
     density_mat,
 )
 
-folder = pathlib.Path(
-    tier4.os.environ.get("SBCI_EXAMPLE_SC", "/work/users/x/y/xya/sbci-derivatives")
-)
+folder = pathlib.Path(tier4.os.environ["SBCI_EXAMPLE_SC"])
 for path in (folder / "sub-example_desc-withendpoints_sc.h5", folder / "sub-example_sc.h5"):
     if path.is_file() and ContinuousConnectome.load(path).endpoints is not None:
         connectome = ContinuousConnectome.load(path)
@@ -69,7 +72,13 @@ area = np.asarray(connectome.area, dtype=np.float64)
 expected = np.asarray(density_mat, dtype=np.float64)
 np.fill_diagonal(expected, 0.0)
 expected /= area @ expected @ area
-smoothed = connectome.smooth(kernel="rdk", bandwidth=kappa, eigenpairs=basis).dense()
+smoothing._kernel_pair = lambda kernel, bandwidth, area, left, right, nu=None: (
+    diffusion_kernel(*left, bandwidth),  # the MATLAB's kernels: no column scaled to unit mass
+    diffusion_kernel(*right, bandwidth),
+)
+smoothed = connectome.smooth(
+    kernel="rdk", bandwidth=kappa, eigenpairs=basis, mask_medial_wall=False
+).dense()
 mine = np.asarray(smoothed, dtype=np.float64)
 compared(f"smooth() on {path.name}", mine, expected)
 print(
@@ -77,6 +86,6 @@ print(
 )
 chosen = kappa_candidates(lam_l)[3]
 print(
-    f"the bandwidth smooth() takes when given none: {chosen:.10g} against the reference's "
-    f"{kappa:.10g}, {abs(chosen - kappa) / kappa:.3g} relative"
+    f"the bandwidth the reference's formula picks, kappa_candidates()[3]: {chosen:.10g} against "
+    f"the reference's {kappa:.10g}, {abs(chosen - kappa) / kappa:.3g} relative"
 )
