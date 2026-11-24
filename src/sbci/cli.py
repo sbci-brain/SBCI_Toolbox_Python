@@ -150,6 +150,57 @@ def build_parser() -> argparse.ArgumentParser:
     atlases = subparsers.add_parser("atlases", help="list the bundled atlases")
     atlases.add_argument("--match", help="only names containing this text")
 
+    convert = subparsers.add_parser(
+        "convert",
+        help="write one subject's sub-<id>_sc.h5 and _fc.h5 from the SBCI pipeline's output",
+        description="Read one subject's sbci_connectome folder, as the SBCI processing pipeline "
+        "leaves it, and write sub-<id>_sc.h5 and sub-<id>_fc.h5: the diagonal dropped and the "
+        "medial wall zeroed, each share reported, SC scaled to unit mass. Each file is "
+        "validated before it takes its name. A JSON report goes to stdout. Exit status 0 when "
+        "everything found was written and passed, 1 for an unusable input or a failed check, "
+        "2 for a usage error.",
+    )
+    convert.add_argument("folder", help="the subject's sbci_connectome folder")
+    convert.add_argument("--subject", required=True, help="subject id, e.g. sub-01 or 01")
+    convert.add_argument("--out", required=True, help="folder for the .h5 files; made if absent")
+    convert.add_argument("--pipeline-version", help="the pipeline's version, recorded as given")
+    convert.add_argument(
+        "--container-version", help="the container's version, recorded as given: name its digest"
+    )
+    convert.add_argument(
+        "--config",
+        help="the run's pipeline profile (KEY=VALUE lines, read and never run): its BANDWIDTH "
+        "and RESOLUTION have to agree with the file names, its FMRI_ settings are recorded",
+    )
+    convert.add_argument(
+        "--session", help="a session label: the files become sub-<id>_ses-<label>_<sc|fc>.h5"
+    )
+    convert.add_argument(
+        "--mapping",
+        help="the run's mapping_avg_ico4.npz, to compare with the bundled vertex areas "
+        "(default: beside the folder, or in the run's files/grid)",
+    )
+
+    qc = subparsers.add_parser(
+        "qc",
+        help="write a quality-control page for one subject's files, index.html, and a verdict",
+        description="Check one subject's files and write index.html in the --out folder: every "
+        "validator check, the files' measures and figures, and the pipeline run's records. "
+        "A JSON summary goes to stdout. Exit status 0 when everything passes, 1 when a check "
+        "fails or a measure is outside the reference limits, 2 for a usage error.",
+    )
+    qc.add_argument("--sc", help="the subject's sub-<id>_sc.h5")
+    qc.add_argument("--fc", help="the subject's sub-<id>_fc.h5")
+    qc.add_argument(
+        "--run-dir", help="the pipeline run's output folder, whose config/ and logs/ are shown"
+    )
+    qc.add_argument("--out", required=True, help="folder for index.html; made if absent")
+    qc.add_argument(
+        "--limits",
+        help="reference limits built by tools/build_qc_reference.py (default: $SBCI_QC_LIMITS, "
+        "else the package's own, if it ships any)",
+    )
+
     return parser
 
 
@@ -337,6 +388,16 @@ def _command(argv: Sequence[str] | None = None) -> int:
         if args.out is not None and Path(args.out).resolve() != download.basis_dir().resolve():
             print(f"  smooth() looks elsewhere: point SBCI_LBO_DIR at {where}, or pass eigenpairs=")
         return 0
+
+    if args.command == "convert":
+        from .convert import command as convert_command
+
+        return convert_command(args)
+
+    if args.command == "qc":
+        from .qc import command as qc_command
+
+        return qc_command(args)
 
     return 0  # pragma: no cover - unreachable, subcommand is required
 
