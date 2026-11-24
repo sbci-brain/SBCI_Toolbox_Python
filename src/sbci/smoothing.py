@@ -1959,7 +1959,7 @@ def smooth(
     kernel: str = "shk",
     bandwidth: float | None = None,
     eigenpairs=None,
-    mask_medial_wall: bool = False,
+    mask_medial_wall: bool = True,
     progress=None,
     nu: float | None = None,
 ):
@@ -2008,15 +2008,14 @@ def smooth(
         in the provenance by its SHA-256; one that makes a signed kernel, as
         the toolkit's does, draws a warning.
     mask_medial_wall
-        ``False``, the default, leaves what the kernel put on the medial wall,
-        as both references do; such a connectome saves, but fails
-        ``sbci validate``'s mask check. ``True`` zeroes the wall's rows and
-        columns before the unit-mass normalization, so that the result
-        satisfies the format's mask rule and ``sbci validate``, as every
-        released file does -- SPEC_QUESTIONS.md item 14. It does not drop the
-        streamlines that end on the wall: their kernels still reach the cortex
-        nearby, and with ``shk`` an end on the wall keeps 12% of its mass there
-        on average.
+        ``True``, the default, zeroes the medial wall's rows and columns
+        before the unit-mass normalization, so that the result satisfies the
+        format's mask rule and ``sbci validate``, as every released file does
+        -- SPEC_QUESTIONS.md item 14. It does not drop the streamlines that
+        end on the wall: their kernels still reach the cortex nearby, and with
+        ``shk`` an end on the wall keeps 12% of its mass there on average.
+        ``False`` leaves what the kernel put on the wall, as both references
+        do; such a connectome saves, but fails ``sbci validate``'s mask check.
     progress
         Optional ``progress(done, total)`` callable, called after each block of
         endpoints for the ``shk`` kernel.
@@ -2137,7 +2136,7 @@ def _finish(
     density: np.ndarray,
     kernel: str,
     bandwidth: float,
-    mask_medial_wall: bool = False,
+    mask_medial_wall: bool = True,
     nu: float | None = None,
     basis: str | None = None,
 ):
@@ -2161,10 +2160,10 @@ def _finish(
             f"at {settings} the smoothed density is not finite; the settings, not the endpoints, "
             "are the cause"
         )
-    # The medial wall is NOT zeroed by default. Neither reference masks -- c3_main's
-    # own output and the MATLAB rdk density both leave mass there -- and the default
-    # follows them, though a re-smoothed density can then fail the validator's mask
-    # check: SPEC_QUESTIONS.md item 14. `mask_medial_wall=True` takes the format's side.
+    # The medial wall is zeroed by default, as every released file has it and the
+    # format requires. Neither reference masks -- c3_main's own output and the MATLAB
+    # rdk density both leave mass there -- so a comparison with them passes False;
+    # SPEC_QUESTIONS.md item 14.
     if mask_medial_wall:
         wall = ~np.asarray(connectome.mask, dtype=bool)
         density[wall, :] = 0.0

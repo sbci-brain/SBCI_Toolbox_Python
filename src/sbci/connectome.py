@@ -358,8 +358,9 @@ class ContinuousConnectome:
         """Re-smooth a structural connectome from its stored endpoints.
 
         Only a structural connectome can be re-smoothed: a functional one has
-        no streamlines. Extra keyword arguments -- ``mask_medial_wall`` and
-        ``progress`` -- pass through to :func:`sbci.smoothing.smooth`.
+        no streamlines. Extra keyword arguments -- ``mask_medial_wall``, which
+        is ``True`` by default so that the result passes ``sbci validate``,
+        and ``progress`` -- pass through to :func:`sbci.smoothing.smooth`.
 
         Returns a new :class:`ContinuousConnectome` carrying the same endpoints
         and metadata, with ``kernel`` and ``bandwidth`` (and ``nu`` for

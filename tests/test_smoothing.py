@@ -829,16 +829,17 @@ def test_the_kernel_is_elementwise():
     np.testing.assert_allclose(together, apart, rtol=0, atol=1e-12)
 
 
-def test_resmoothing_leaves_the_medial_wall_as_the_reference_does():
-    """smooth() must not silently mask, however tempting it is.
+def test_resmoothing_masks_the_medial_wall_by_default_and_leaves_it_when_asked():
+    """smooth() masks the medial wall unless told not to (M6, SPEC_QUESTIONS.md item 14).
 
-    The format requires a stored file to carry nothing on the medial wall, but
-    neither reference produces one: c3_main's released output puts 0.87% of its
-    mass there, and MATLAB's rdk density does too. Zeroing it inside smooth()
-    would make the method diverge from both and break
-    test_smooth_method_matches_matlab, so the conflict is recorded as
-    SPEC_QUESTIONS.md item 14 rather than papered over. This pins the choice.
+    The format requires a stored file to carry nothing on the medial wall, and
+    every released file was smoothed with the wall masked; neither reference
+    masks. The default used to follow the references, so re-smoothing a
+    released file neither gave it back nor passed ``sbci validate``. It now
+    follows the format; ``mask_medial_wall=False`` keeps what the kernel put
+    there, which is what a comparison with the references wants.
     """
+    from sbci.grid import to_dense
     from sbci.smoothing import _finish
 
     n = 8
@@ -854,15 +855,31 @@ def test_resmoothing_leaves_the_medial_wall_as_the_reference_does():
             self.metadata, self.coords, self.endpoints = metadata, coords, endpoints
 
     connectome = Fake(None, np.full(n, 1.0 / n), mask, metadata_template("sc"), None, None)
-    out = _finish(connectome, dense.copy(), "shk", 0.005)
+    masked = to_dense(_finish(connectome, dense.copy(), "shk", 0.005).data, n)
+    kept = to_dense(_finish(connectome, dense.copy(), "shk", 0.005, mask_medial_wall=False).data, n)
+    assert float(np.abs(masked[~mask]).sum()) == 0.0, "the default masks the wall"
+    assert float(np.abs(kept[~mask]).sum()) > 0.0, "and False keeps what the kernel gave it"
+    for result in (masked, kept):
+        assert float(
+            connectome.area @ result.astype(np.float64) @ connectome.area
+        ) == pytest.approx(1.0, rel=1e-6)
 
-    from sbci.grid import to_dense
 
-    result = to_dense(out.data, n)
-    assert float(np.abs(result[~mask]).sum()) > 0.0, "the wall keeps what the reference gives it"
-    assert float(connectome.area @ result.astype(np.float64) @ connectome.area) == pytest.approx(
-        1.0, rel=1e-6
-    )
+def test_resmoothing_with_the_defaults_gives_the_file_back_and_validates(tmp_path):
+    """Re-smoothed with the defaults, a released-style file kept a wall and failed validate (M6)."""
+    import sbci
+    from sbci.validate import validate_file
+
+    sc = sbci.example()
+    again = sc.smooth()
+    assert np.corrcoef(np.asarray(again.data), np.asarray(sc.data))[0, 1] > 0.999999
+    np.testing.assert_array_equal(np.asarray(again.data), np.asarray(sc.data))
+    failed = [
+        check.name
+        for check in validate_file(again.save(tmp_path / "sub-synth01_sc.h5"))
+        if not check.passed
+    ]
+    assert failed == []
 
 
 def test_the_quantized_kernel_reproduces_the_binarys_peak_entry_exactly():
