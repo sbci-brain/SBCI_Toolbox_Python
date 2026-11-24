@@ -127,7 +127,7 @@ def test_cluster_robust_errors_match_statsmodels():
     scores, table = _cohort(n=150, seed=1)
     families = np.arange(150) // 3
     d = design(table)
-    result = local_test(scores, d, terms=["age"], groups=families)
+    result = local_test(scores, d, terms=["age"], groups=families, vcov="CR1")
     assert result.interval_dof == 49
     for k in range(scores.shape[1]):
         theirs = sm.OLS(scores[:, k], d.matrix).fit(
@@ -212,7 +212,7 @@ def test_a_contrast_with_families_matches_statsmodels_robust_wald():
     d = design(table)
     weights = np.zeros(len(d.names))
     weights[[1, 2]] = [1, -1]
-    result = local_test(scores, d, contrast=weights, groups=families, method="none")
+    result = local_test(scores, d, contrast=weights, groups=families, method="none", vcov="CR1")
     for k in range(scores.shape[1]):
         theirs = sm.OLS(scores[:, k], d.matrix).fit(
             cov_type="cluster", cov_kwds={"groups": families}

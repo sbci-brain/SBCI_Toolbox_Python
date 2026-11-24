@@ -9,10 +9,16 @@ the false discovery rate, and power rising with effect size.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
 from sbci.stats import LocalTest, benjamini_hochberg, design, local_test
+
+# Many cohorts below have a few dozen families on purpose, so their cluster-robust tests
+# rest on few degrees of freedom and say so; the warning itself is tested where it is meant.
+pytestmark = pytest.mark.filterwarnings("ignore:groups=.*degrees of freedom:UserWarning")
 
 
 def _statsmodels():
@@ -405,7 +411,9 @@ def test_clustered_standard_errors_match_an_explicit_sandwich():
     groups, covariate = _families(rng, 60)
     nuisance = rng.standard_normal(groups.size)
     scores = rng.standard_normal((groups.size, 3)) + 0.3 * covariate[:, None]
-    result = local_test(scores, np.column_stack([covariate, nuisance]), terms=[1], groups=groups)
+    result = local_test(
+        scores, np.column_stack([covariate, nuisance]), terms=[1], groups=groups, vcov="CR1"
+    )
 
     X = np.column_stack([np.ones(groups.size), covariate, nuisance])
     n, p = X.shape
@@ -437,7 +445,7 @@ def test_clustered_test_matches_statsmodels():
     scores += 0.15 * covariate[:, None]
     X = sm.add_constant(design)
     for terms in ([1], [1, 2]):
-        ours = local_test(scores, design, terms=terms, groups=groups, method="none")
+        ours = local_test(scores, design, terms=terms, groups=groups, method="none", vcov="CR1")
         restriction = np.zeros((len(terms), X.shape[1]))
         restriction[np.arange(len(terms)), terms] = 1.0
         for k in range(scores.shape[1]):
@@ -788,7 +796,7 @@ def test_standard_errors_do_not_depend_on_a_covariates_units():
 def test_clustered_errors_do_not_depend_on_a_covariates_units():
     sm = _statsmodels()
     covariates, scores, families = _covariates_in_large_units()
-    result = local_test(scores, covariates, terms=[3], groups=families)
+    result = local_test(scores, covariates, terms=[3], groups=families, vcov="CR1")
     for k in range(scores.shape[1]):
         reference = sm.OLS(scores[:, k], sm.add_constant(covariates)).fit(
             cov_type="cluster", cov_kwds={"groups": families}
@@ -1074,3 +1082,308 @@ def test_icc_is_nan_where_its_denominator_is_not_positive():
     sessions = np.array([[[1.0], [2.0]], [[2.0], [1.0]]])  # (session, subject, feature)
     assert np.isnan(icc(sessions)).all()
     assert icc(sessions, "consistency")[0] == pytest.approx(-1.0)
+
+
+# --- the November 2026 review: CR2, and how many families a test rests on ---------
+
+
+def _clubsandwich_design():
+    """91 subjects in 40 families; a factor whose last level three families carry."""
+    rng = np.random.default_rng(2026)
+    sizes = rng.choice([1, 2, 3, 4], 40, p=[0.25, 0.4, 0.25, 0.1])
+    families = np.repeat(np.arange(40), sizes)
+    n = families.size
+    band = rng.integers(0, 3, 40)
+    band[rng.choice(40, 3, replace=False)] = 3  # the last level: three families
+    dummies = (band[families][:, None] == np.arange(1, 4)).astype(float)
+    shared = rng.standard_normal(40)[families] + rng.standard_normal(n)
+    X = np.column_stack([np.ones(n), dummies, shared])
+    y = rng.standard_normal(40)[families] + rng.standard_normal(n)
+    return X, y, families
+
+
+def test_cr2_matches_clubsandwich():
+    """Errors, degrees of freedom and p-values as R's clubSandwich 0.6.2 gives them.
+
+    ``coef_test(lm(y ~ X - 1), vcov="CR2", cluster=families, test="Satterthwaite")`` for each
+    coefficient, and ``Wald_test(..., test="HTZ")`` for two joint hypotheses; the R values are
+    recorded here to 17 digits (the script that made them is with the review's checks).
+    """
+    X, y, families = _clubsandwich_design()
+    se = [
+        0.46978979159921119,
+        0.52817423606804204,
+        0.51531755881923125,
+        0.630003802134394,
+        0.1126929556008323,
+    ]
+    df = [
+        8.1868539787719339,
+        17.478636813250489,
+        17.119200652390461,
+        2.5619449423810248,
+        18.811087015684503,
+    ]
+    p = [
+        0.91568397190049078,
+        0.74674408589695551,
+        0.73876630951405242,
+        0.75571632932335386,
+        0.84639753465520684,
+    ]
+    for j in range(5):
+        result = local_test(y, X, terms=[j], add_intercept=False, groups=families, method="none")
+        assert result.vcov == "CR2"
+        np.testing.assert_allclose(result.standard_errors[0], se, rtol=1e-10)
+        np.testing.assert_allclose(result.coefficient_dof, df, rtol=1e-10)
+        assert result.df == pytest.approx(df[j], rel=1e-10)
+        assert result.pvalue[0] == pytest.approx(p[j], rel=1e-10)
+        assert result.statistic[0] == pytest.approx(
+            (result.coefficients[0, j] / se[j]) ** 2, rel=1e-10
+        )
+    joint = {
+        (1, 2, 3): (0.19281426112141276, 7.4202683433164083, 0.89818538913376889),
+        (3, 4): (0.072929246092267724, 4.9028789927387626, 0.9306560739255183),
+    }
+    for rows, (statistic, denominator, pvalue) in joint.items():
+        result = local_test(
+            y,
+            X,
+            contrast=np.eye(5)[list(rows)],
+            add_intercept=False,
+            groups=families,
+            method="none",
+        )
+        assert result.numerator_dof == len(rows)
+        assert result.statistic[0] == pytest.approx(statistic, rel=1e-10)
+        assert result.df == pytest.approx(denominator, rel=1e-10)
+        assert result.pvalue[0] == pytest.approx(pvalue, rel=1e-10)
+        np.testing.assert_allclose(result.interval_dof, [df[r] for r in rows], rtol=1e-10)
+
+
+def _cr2_by_hand(X, families, rows):
+    """CR2's pieces written out from their definitions, with dense ``n x n`` matrices.
+
+    The adjustment ``A_g = (I - H_gg)^(-1/2)``; ``P_g = (I - H)_(.g) A_g X_g (X'X)^-1 C'``,
+    so that ``C V C' = sum_g P_g' y y' P_g``; and Hotelling's eta from the covariances of
+    those parts under independent errors of unit variance, normalized by their expectation.
+    """
+    n = X.shape[0]
+    bread = np.linalg.inv(X.T @ X)
+    hat = X @ bread @ X.T
+    adjust = np.zeros((n, n))
+    for g in np.unique(families):
+        inside = np.flatnonzero(families == g)
+        values, vectors = np.linalg.eigh(np.eye(inside.size) - hat[np.ix_(inside, inside)])
+        adjust[np.ix_(inside, inside)] = (vectors / np.sqrt(values)) @ vectors.T
+    C = np.atleast_2d(rows)
+    parts = []
+    for g in np.unique(families):
+        inside = np.flatnonzero(families == g)
+        parts.append(
+            (np.eye(n) - hat)[:, inside] @ adjust[np.ix_(inside, inside)] @ X[inside] @ bread @ C.T
+        )
+    q = C.shape[0]
+    expected = sum(part.T @ part for part in parts)
+    values, vectors = np.linalg.eigh(expected)
+    root = (vectors / np.sqrt(values)) @ vectors.T
+    scaled = [part @ root for part in parts]
+    total = 0.0
+    for s in range(q):
+        for t in range(q):
+            for one in scaled:
+                for other in scaled:
+                    omega = one.T @ other
+                    total += omega[s, s] * omega[t, t] + omega[s, t] * omega[t, s]
+    return adjust, bread, expected, q * (q + 1) / total
+
+
+def test_cr2_and_its_degrees_of_freedom_follow_their_definitions():
+    """The sandwich, the expected sandwich and Hotelling's eta, against dense matrices."""
+    rng = np.random.default_rng(31)
+    families = np.repeat(np.arange(25), rng.integers(1, 5, 25))
+    n = families.size
+    X = np.column_stack(
+        [
+            np.ones(n),
+            rng.standard_normal(25)[families],
+            rng.standard_normal(n),
+            (rng.random(25) < 0.2)[families].astype(float),
+        ]
+    )
+    y = rng.standard_normal(25)[families] + rng.standard_normal(n)
+    for rows in (np.eye(4)[[1]], np.eye(4)[[3]], np.eye(4)[[1, 2]], np.eye(4)[[1, 2, 3]]):
+        adjust, bread, expected, eta = _cr2_by_hand(X, families, rows)
+        result = local_test(
+            y, X, contrast=rows, add_intercept=False, groups=families, method="none"
+        )
+        residual = y - X @ (bread @ X.T @ y)
+        meat = sum(
+            np.outer(
+                X[families == g].T @ (adjust @ residual)[families == g],
+                X[families == g].T @ (adjust @ residual)[families == g],
+            )
+            for g in np.unique(families)
+        )
+        covariance = bread @ meat @ bread
+        np.testing.assert_allclose(
+            result.estimate_errors[0], np.sqrt(np.diag(rows @ covariance @ rows.T)), rtol=1e-10
+        )
+        q = rows.shape[0]
+        assert result.df == pytest.approx(eta - q + 1, rel=1e-10)
+        # E[V_CR2] = sigma^2 (X'X)^-1 exactly when the errors are independent and alike
+        np.testing.assert_allclose(expected, rows @ bread @ rows.T, rtol=1e-10, atol=1e-14)
+
+
+def test_cr2_is_unbiased_for_independent_errors_of_equal_variance():
+    """E[V_CR2] = sigma^2 (X'X)^-1 (Bell and McCaffrey), summed exactly over unit responses.
+
+    A quadratic form ``y' B y`` in ``y ~ N(0, I)`` has expectation ``tr B``, the sum of
+    ``e_k' B e_k`` over the unit vectors: the package's errors for the ``n`` responses
+    ``e_k``, squared and summed, are ``E[c' V c]``. CR1's are not.
+    """
+    rng = np.random.default_rng(32)
+    families = np.repeat(np.arange(30), rng.integers(1, 5, 30))
+    n = families.size
+    X = np.column_stack([np.ones(n), rng.standard_normal(30)[families], rng.standard_normal(n)])
+    bread = np.linalg.inv(X.T @ X)
+    units = np.eye(n)
+    for vcov, tolerance in (("CR2", 1e-10), ("CR1", None)):
+        result = local_test(
+            units, X, terms=[1, 2], add_intercept=False, groups=families, method="none", vcov=vcov
+        )
+        expected = (result.standard_errors**2).sum(axis=0)
+        if tolerance:
+            np.testing.assert_allclose(expected, np.diag(bread), rtol=tolerance)
+        else:
+            assert np.abs(expected / np.diag(bread) - 1).max() > 1e-3
+
+
+def test_a_column_one_family_carries_is_refused():
+    """A covariate one family carries: CR1 rejected 92% of true nulls; neither test can see it.
+
+    Its estimate is that family's mean against the rest, and the residuals of that family sum
+    to zero, so no cluster-robust error sees its variance: refused, as a term, a factor's
+    level, or in a contrast. A nuisance column one family carries still lets the others be
+    tested; under CR2 its own error is NaN.
+    """
+    rng = np.random.default_rng(33)
+    families = np.repeat(np.arange(60), 2)
+    n = families.size
+    alone = (families == 7).astype(float)
+    other = rng.standard_normal(n)
+    scores = rng.standard_normal((n, 3))
+    for vcov in (None, "CR1"):
+        with pytest.raises(ValueError, match="carried by one family alone"):
+            local_test(
+                scores, np.column_stack([alone, other]), terms=[1], groups=families, vcov=vcov
+            )
+        site = np.where(families == 7, "C", np.where(families % 2, "A", "B"))
+        d = design({"site": site, "other": other})
+        with pytest.raises(ValueError, match="carried by one family alone"):
+            local_test(scores, d, terms=["site"], groups=families, vcov=vcov)
+        with pytest.raises(ValueError, match="carried by one family alone"):
+            local_test(
+                scores, d, contrast={"site[C]": 1, "site[B]": -1}, groups=families, vcov=vcov
+            )
+        fine = local_test(
+            scores, np.column_stack([alone, other]), terms=[2], groups=families, vcov=vcov
+        )
+        assert np.isfinite(fine.pvalue).all() and np.isfinite(fine.standard_errors[:, 2]).all()
+        assert np.isnan(fine.standard_errors[:, 1]).all() == (vcov is None)
+    two = (families < 2).astype(float)  # two families: few, but testable
+    assert np.isfinite(local_test(scores, two, groups=families).pvalue).all()
+
+
+def test_few_families_carrying_what_is_tested_warn():
+    """Fewer than 30 degrees of freedom warn, under CR2 and, with its own reason, under CR1."""
+    rng = np.random.default_rng(34)
+    families = np.repeat(np.arange(200), 2)
+    n = families.size
+    rare = np.isin(families, [3, 50, 120]).astype(float)
+    common = rng.standard_normal(200)[families] + rng.standard_normal(n)
+    scores = rng.standard_normal((n, 4))
+    with pytest.warns(UserWarning, match=r"the test has \d+\.\d degrees of freedom, fewer than 30"):
+        few = local_test(scores, np.column_stack([rare, common]), terms=[1], groups=families)
+    assert few.df < 5
+    with pytest.warns(UserWarning, match="vcov='CR1' tests on 199 degrees of freedom"):
+        old = local_test(
+            scores, np.column_stack([rare, common]), terms=[1], groups=families, vcov="CR1"
+        )
+    assert old.df == 199
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # a covariate every family has: no warning
+        many = local_test(scores, np.column_stack([rare, common]), terms=[2], groups=families)
+    assert many.df > 100
+
+
+def test_cr2_holds_the_null_when_few_families_carry_the_covariate():
+    """Three of 150 families carry a covariate: CR1 rejects about a quarter of true nulls.
+
+    The scores are shared within families, as the review's few_family_level.py builds them;
+    CR2's degrees of freedom bring the rejections back to the nominal rate.
+    """
+    rng = np.random.default_rng(35)
+    rates = {"CR2": [], "CR1": []}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for _ in range(150):
+            families = np.repeat(np.arange(150), rng.integers(1, 5, 150))
+            n = families.size
+            rare = np.isin(families, rng.choice(150, 3, replace=False)).astype(float)
+            scores = rng.standard_normal((150, 20))[families] + rng.standard_normal((n, 20))
+            X = np.column_stack([rare, rng.standard_normal(n)])
+            for vcov in rates:
+                result = local_test(scores, X, terms=[1], groups=families, method="none", vcov=vcov)
+                rates[vcov].append(np.mean(result.pvalue < 0.05))
+    assert np.mean(rates["CR1"]) > 0.15, rates
+    assert np.mean(rates["CR2"]) < 0.075, rates
+
+
+def test_vcov_is_checked_and_the_groups_count_keeps_its_name():
+    rng = np.random.default_rng(36)
+    scores, covariate = rng.standard_normal((40, 2)), rng.standard_normal(40)
+    families = np.repeat(np.arange(20), 2)
+    with pytest.raises(ValueError, match="without groups= the subjects are independent"):
+        local_test(scores, covariate, vcov="CR2")
+    with pytest.raises(ValueError, match="vcov must be one of"):
+        local_test(scores, covariate, groups=families, vcov="HC3")
+    result = local_test(scores, covariate, groups=families)
+    assert result.n_groups == result.groups == 20 and result.vcov == "CR2"
+    plain = local_test(scores, covariate)
+    assert plain.n_groups == 0 and plain.vcov == "classical" and plain.df == plain.residual_dof
+    np.testing.assert_array_equal(plain.coefficient_dof, [38.0, 38.0])
+
+
+def test_cr2_intervals_take_each_rows_own_degrees_of_freedom():
+    """Two contrast rows: each interval on the degrees of freedom of its row tested alone."""
+    from scipy.stats import t
+
+    X, y, families = _clubsandwich_design()
+    rows = np.eye(5)[[3, 4]]
+    joint = local_test(y, X, contrast=rows, add_intercept=False, groups=families)
+    low, high = joint.interval(0.9)
+    for r in range(2):
+        alone = local_test(y, X, contrast=rows[[r]], add_intercept=False, groups=families)
+        assert joint.interval_dof[r] == pytest.approx(alone.df, rel=1e-12)
+        half = t.ppf(0.95, alone.df) * alone.estimate_errors[0, 0]
+        assert high[0, r] - low[0, r] == pytest.approx(2 * half, rel=1e-12)
+    low, high = joint.interval(0.9, coefficients=True)
+    np.testing.assert_allclose(
+        high[0] - low[0],
+        2 * t.ppf(0.95, joint.coefficient_dof) * joint.standard_errors[0],
+        rtol=1e-12,
+    )
+
+
+def test_cr2_by_blocks_of_columns_matches_one_pass(monkeypatch):
+    """The sandwich's meat is summed a block of columns at a time to bound its memory."""
+    from sbci import stats
+
+    X, _, families = _clubsandwich_design()
+    scores = np.random.default_rng(37).standard_normal((X.shape[0], 23))
+    whole = local_test(scores, X, terms=[4], add_intercept=False, groups=families)
+    monkeypatch.setattr(stats, "_BLOCK_ELEMENTS", 7)
+    blocks = local_test(scores, X, terms=[4], add_intercept=False, groups=families)
+    np.testing.assert_allclose(blocks.statistic, whole.statistic, rtol=1e-13)
+    np.testing.assert_allclose(blocks.standard_errors, whole.standard_errors, rtol=1e-13)

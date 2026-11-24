@@ -50,23 +50,39 @@ Related subjects
 ----------------
 The tests assume independent subjects. A cohort of families is not: the HCP
 Young Adult subjects include twins and siblings, and treating them as
-independent makes every p-value too small. ``groups=`` (the
-family of each subject) replaces the classical standard errors by
-cluster-robust ones, which allow any dependence inside a family, and takes the
-degrees of freedom from the number of families, not of subjects. Like any
-cluster-robust test it needs many families: in simulated cohorts with no
-association it rejects at 0.05 9.7% of the time with 20 families, 6.0% with
-100 and 5.6% with 400, where the test that ignores the families rejects 16% to
-17% (``tools/clustered_null.py``). Permutation is not offered with groups:
-shuffling members between families of different make-up (twins against
-siblings) is not exchangeable, and doing it properly needs each family's
-structure, not just its label.
+independent makes every p-value too small. ``groups=`` (the family of each
+subject) replaces the classical standard errors by cluster-robust ones, which
+allow any dependence inside a family. By default these are Bell and
+McCaffrey's CR2 errors, with their degrees of freedom worked out for the
+hypothesis tested (Pustejovsky and Tipton, 2018): what matters is how many
+families the tested covariate varies across, not how many there are. A
+covariate carried by a few families of four hundred -- a site, a scanner, the
+oldest age band -- gets few degrees of freedom, and its p-value allows for
+that. ``vcov="CR1"`` gives the plain sandwich, which takes ``G - 1`` degrees
+of freedom for ``G`` families whatever is tested. In simulated cohorts of 400
+twin-like families with no association, a covariate carried by 1, 2, 3, 5, 10
+or 40 of them is rejected at 0.05 by CR1 92%, 42%, 27%, 17%, 11% and 6% of the
+time, and by the default 2.6% to 5.4% of the time, the one family's covariate
+refused. A test with fewer than 30 degrees of freedom warns, and what only one
+family carries is refused: no cluster-robust error can see its variance. A
+covariate every family has, sex or a trait, gets about half as many degrees
+of freedom as there are families; its p-values come out about 1% larger than
+CR1's, and up to a few times larger far in the tail, below 0.001.
+
+Permutation is not offered with groups: shuffling members between families of
+different make-up (twins against siblings) is not exchangeable, and doing it
+properly needs each family's structure, not just its label.
+
+References: Bell, R. M. and McCaffrey, D. F. (2002), Survey Methodology 28,
+169-181; Pustejovsky, J. E. and Tipton, E. (2018), Journal of Business and
+Economic Statistics 36, 672-683.
 """
 
 from __future__ import annotations
 
 import difflib
 import numbers
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -74,6 +90,19 @@ import numpy as np
 
 METHODS = ("fdr", "bonferroni", "none")
 """Multiplicity corrections. ``fdr`` is Benjamini-Hochberg."""
+
+VCOV = ("CR2", "CR1")
+"""Cluster-robust covariances for ``groups=``. ``CR2``, the default: Bell and
+McCaffrey's, on the degrees of freedom of the hypothesis (Bell and McCaffrey's
+for one row, Hotelling's approximation for several). ``CR1``: the sandwich with
+the factor ``G / (G - 1) * (n - 1) / (n - p)`` on ``G - 1`` degrees of
+freedom, as statsmodels' ``cov_type="cluster"``."""
+
+FEW_DEGREES = 30
+"""A cluster-robust test on fewer degrees of freedom than this warns."""
+
+#: Eigenvalues of a family's ``I - H_gg`` at or below this are taken as zero, as clubSandwich does.
+_NULL_EIGENVALUE = 1e-12
 
 
 def benjamini_hochberg(pvalues):
@@ -492,7 +521,10 @@ class LocalTest:
     statistic: np.ndarray
     """``(n_columns,)`` F statistic for the tested hypothesis; ``NaN`` where a
     column has no residual variance or non-finite scores and so cannot be
-    tested."""
+    tested. With ``groups=`` it is the Wald statistic over ``q``, and under
+    CR2 with several rows Hotelling's approximation scales it by
+    ``(eta - q + 1) / eta``, so that :attr:`pvalue` is its F tail on
+    :attr:`numerator_dof` and :attr:`df` degrees of freedom either way."""
     pvalue: np.ndarray
     """``(n_columns,)`` unadjusted p-values, ``NaN`` where the statistic is."""
     adjusted: np.ndarray
@@ -509,10 +541,9 @@ class LocalTest:
     """How many permutations produced the p-values, or 0 if parametric."""
     terms: tuple = ()
     """Columns of the design matrix that were tested, or that the contrast weighs."""
-    groups: int = 0
+    n_groups: int = 0
     """How many groups (families) the subjects fall in when ``groups=`` was
-    given, and the p-values come from cluster-robust standard errors with
-    ``groups - 1`` denominator degrees of freedom; 0 for independent subjects."""
+    given; 0 for independent subjects."""
     names: tuple = ()
     """The design's column names when it had them (:func:`design`), else empty."""
     contrast: np.ndarray | None = None
@@ -525,13 +556,32 @@ class LocalTest:
     row is not estimable on its own (a factor coded at every level beside the
     intercept)."""
     standard_errors: np.ndarray | None = None
-    """``(n_columns, n_terms)`` standard errors of every coefficient, likewise."""
-    interval_dof: int = 0
-    """Degrees of freedom of the t intervals: :attr:`residual_dof`, or
-    ``groups - 1`` with families as clusters."""
+    """``(n_columns, n_terms)`` standard errors of every coefficient, likewise;
+    with CR2, ``NaN`` too for a coefficient only one family's subjects
+    estimate, whose variance the families cannot show."""
+    interval_dof: int | np.ndarray = 0
+    """Degrees of freedom of the t intervals of :attr:`estimate`:
+    :attr:`residual_dof`, or ``n_groups - 1`` with ``vcov="CR1"``; with CR2 an
+    array, Bell and McCaffrey's degrees of freedom of each row of the estimate."""
     partial_r2: np.ndarray | None = None
     """``(n_columns,)`` share of what the hypothesis's reduced model leaves
     unexplained that the tested part explains: an effect size, from the fits."""
+    df: float = np.nan
+    """Denominator degrees of freedom of the F test: :attr:`residual_dof` for
+    independent subjects; with ``groups=``, Bell and McCaffrey's for one row
+    under CR2 and ``eta - q + 1`` of Hotelling's approximation for several,
+    or ``n_groups - 1`` under CR1. The same for every column: it depends on the
+    design, the families and the hypothesis, not on the scores."""
+    vcov: str = "classical"
+    """How the standard errors were computed: ``classical``, ``CR2`` or ``CR1``."""
+    coefficient_dof: np.ndarray | None = None
+    """``(n_terms,)`` degrees of freedom of each coefficient's t interval, as
+    :attr:`interval_dof` is for the estimate's rows."""
+
+    @property
+    def groups(self) -> int:
+        """:attr:`n_groups`, under the name it had first: how many groups, not which."""
+        return self.n_groups
 
     def significant(self, alpha: float = 0.05) -> np.ndarray:
         """Indices of columns whose adjusted p-value is at or below ``alpha``."""
@@ -540,10 +590,11 @@ class LocalTest:
     def interval(self, level: float = 0.95, coefficients: bool = False):
         """Confidence intervals, ``(lower, upper)``, from the t distribution.
 
-        Of :attr:`estimate` by default, ``(n_columns, q)``; of every coefficient
-        with ``coefficients=True``. The standard errors are the classical ones,
-        or cluster-robust with ``groups=``, on :attr:`interval_dof` degrees of
-        freedom; a permutation test changes the p-values, not the intervals.
+        Of :attr:`estimate` by default, ``(n_columns, q)``, on
+        :attr:`interval_dof` degrees of freedom; of every coefficient with
+        ``coefficients=True``, on :attr:`coefficient_dof`. The standard errors
+        are the classical ones, or cluster-robust with ``groups=``; a
+        permutation test changes the p-values, not the intervals.
         """
         from scipy.stats import t
 
@@ -551,11 +602,13 @@ class LocalTest:
             raise ValueError(f"level must lie between 0 and 1, got {level}")
         if coefficients:
             centre, error = self.coefficients, self.standard_errors
+            dof = self.interval_dof if self.coefficient_dof is None else self.coefficient_dof
         else:
             centre, error = self.estimate, self.estimate_errors
+            dof = self.interval_dof
         if centre is None or error is None:
             raise ValueError("this result carries no standard errors")
-        half = t.ppf(0.5 + level / 2, self.interval_dof) * np.asarray(error)
+        half = t.ppf(0.5 + level / 2, dof) * np.asarray(error)
         return np.asarray(centre) - half, np.asarray(centre) + half
 
     def _column(self, term) -> int:
@@ -686,8 +739,9 @@ def local_test(
     seed=None,
     groups=None,
     contrast=None,
+    vcov=None,
 ) -> LocalTest:
-    """Test each column of the scores for association with the design.
+    """Test each column (component or vertex) of the scores for association with the design.
 
     Fits ``scores[:, k] ~ design`` by least squares for every column and
     tests a hypothesis about its coefficients with an F test -- that the
@@ -696,6 +750,22 @@ def local_test(
     with its standard error and confidence interval
     (:meth:`LocalTest.interval`) and an effect size
     (:attr:`LocalTest.partial_r2`).
+
+    Each column is tested on its own; there is no global test of whether the
+    design is associated with any column at all. The smallest
+    Bonferroni-adjusted p-value is one: a p-value for "no column is
+    associated", valid however the columns depend on each other, if
+    conservative::
+
+        result = local_test(scores, d, terms=["sex"], method="bonferroni")
+        global_p = np.nanmin(result.adjusted)
+
+    A joint test of ``K`` components turns the regression around: the
+    covariate on all of them and the same nuisance covariates, one F test of
+    the ``K`` components' coefficients together::
+
+        every = design({**{f"c{k}": scores[:, k] for k in range(K)}, "age": age})
+        local_test(sex, every, terms=[f"c{k}" for k in range(K)], groups=families).pvalue[0]
 
     Parameters
     ----------
@@ -755,23 +825,43 @@ def local_test(
         ``(n_subjects,)`` labels, one per subject, for subjects that are not
         independent: the family of each, in a cohort of twins and siblings.
         The hypothesis is then judged by a Wald test with cluster-robust
-        standard errors (the usual small-sample correction,
-        ``G / (G - 1) * (n - 1) / (n - p)`` for ``G`` groups and ``p``
-        columns), and the F statistic's denominator has ``G - 1`` degrees of
-        freedom instead of ``n - p``, as do the intervals. It needs a design of
-        full column rank and hundreds of groups rather than dozens (the module
-        notes), and cannot be combined with ``permutations``. Every subject
-        needs a label: a missing one -- ``NaN``, ``None``, or an empty or blank
-        string -- is refused, since coded like any other label it would put
-        every subject without a family into one family together. A subject
-        without a family takes a label of its own. Labels that differ as given
-        but are one once written as text, 1 and ``"1"``, are refused too.
+        standard errors, which allow any dependence inside a family (see
+        ``vcov``). Its degrees of freedom, :attr:`LocalTest.df`, follow from
+        how many families the tested columns vary across, not from how many
+        subjects or families there are: a covariate shared by every family,
+        such as sex, gets hundreds; a factor level carried by a handful of
+        families, a few. A test on fewer than 30 warns that it rests on few
+        families, and a tested column that differs from the rest of the
+        design in one family alone -- a level only that family holds -- is
+        refused, since the families cannot show its variance. It needs a
+        design of full column rank, and cannot be combined with
+        ``permutations``. Every subject needs a label: a missing one --
+        ``NaN``, ``None``, or an empty or blank string -- is refused, since
+        coded like any other label it would put every subject without a family
+        into one family together. A subject without a family takes a label of
+        its own. Labels that differ as given but are one once written as text,
+        1 and ``"1"``, are refused too.
     contrast
         Instead of ``terms``, a contrast of the coefficients to test for zero:
         a weight per design column -- an array of them, or with a
         :class:`Design` a dict by name, ``{"site[B]": 1, "site[C]": -1}`` --
         or several such rows, tested jointly. It has to be estimable from the
         design: a combination the data can tell apart.
+    vcov
+        With ``groups=``, which cluster-robust errors (:data:`VCOV`). ``"CR2"``,
+        the default: Bell and McCaffrey's errors, each family's residuals
+        scaled by ``(I - H_gg)^(-1/2)`` for its block ``H_gg`` of the hat
+        matrix, which makes them unbiased when the errors are independent
+        with equal variance; a single row is tested by t on Bell and
+        McCaffrey's degrees of freedom, several by Hotelling's approximation
+        (Pustejovsky and Tipton's HTZ), both as R's clubSandwich computes them.
+        ``"CR1"``: the sandwich with the factor
+        ``G / (G - 1) * (n - 1) / (n - p)`` for ``G`` groups and ``p`` columns
+        on ``G - 1`` degrees of freedom, as statsmodels'
+        ``OLS(...).fit(cov_type="cluster")``, whatever is tested; it is too
+        liberal when few families carry what is tested, and then warns.
+        Without ``groups=`` the errors are the classical ones, and ``vcov`` is
+        refused.
 
     Examples
     --------
@@ -783,6 +873,14 @@ def local_test(
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+    if vcov is not None:
+        if groups is None:
+            raise ValueError(
+                "vcov= chooses the cluster-robust errors of groups=; without groups= the "
+                "subjects are independent and the errors are the classical ones"
+            )
+        if vcov not in VCOV:
+            raise ValueError(f"vcov must be one of {VCOV}, got {vcov!r}")
 
     scores = np.asarray(scores, dtype=np.float64)
     if scores.ndim == 1:
@@ -1044,6 +1142,8 @@ def local_test(
     meat = None
     n_groups = 0
     denominator_dof = residual_dof
+    kind = "classical"
+    families = None
     if codes is not None:
         # ... or the cluster-robust sandwich, A M A'. A column of zeros fits as
         # nothing, and the sandwich is formed without it.
@@ -1054,16 +1154,68 @@ def local_test(
                 "groups= needs a design of full column rank; a constant covariate duplicates "
                 "the intercept, and dummy codes for every level of a factor do too"
             )
-        statistic, factor, meat = _clustered_wald(
-            matrix[:, present],
-            scores,
-            full_beta[present],
-            codes,
-            n_groups,
-            rows[:, present],
-            np.isfinite(statistic),
-        )
-        denominator_dof = n_groups - 1
+        kind = vcov or "CR2"
+        q = rows.shape[0]
+        if n_groups - 1 < q:
+            raise ValueError(
+                f"{n_groups} groups give a cluster-robust covariance of rank {n_groups - 1} at "
+                f"most, too few to test {q} combinations at once: test fewer terms, or use more "
+                "groups"
+            )
+        # What depends on the design and the families alone, once for every column:
+        # each family's adjustment, and the degrees of freedom of the hypothesis.
+        families = _Families(matrix[:, present], codes, n_groups)
+        tested_rows = rows[:, present] @ families.factor
+        if families.unseen(tested_rows).any():
+            raise ValueError(
+                "what is tested is carried by one family alone: a tested column differs from "
+                "the rest of the design only in one family's subjects (a level, site or scanner "
+                "no other family has), so the families cannot show the variance of its estimate "
+                "and groups= cannot test it; merge that level into another, or leave the column "
+                "out"
+            )
+        eta = families.hotelling(tested_rows)
+        joint_dof = eta - q + 1  # Hotelling's approximation; Bell and McCaffrey's for q = 1
+        if kind == "CR1":
+            statistic, factor, meat = _clustered_wald(
+                matrix[:, present],
+                scores,
+                full_beta[present],
+                codes,
+                n_groups,
+                rows[:, present],
+                np.isfinite(statistic),
+            )
+            denominator_dof = n_groups - 1
+            if min(joint_dof, denominator_dof) < FEW_DEGREES:
+                warnings.warn(
+                    f"groups= with vcov='CR1' tests on {denominator_dof} degrees of freedom, but "
+                    f"CR2 gives this hypothesis {max(joint_dof, 0.0):.1f}: the tested columns "
+                    f"vary across few of the {n_groups} families, and CR1 then rejects a true "
+                    "null too often; the default, vcov='CR2', allows for it",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        else:
+            if not joint_dof > 0:
+                raise ValueError(
+                    f"the {q} tested rows vary across too few families to be tested together: "
+                    f"Hotelling's approximation leaves {joint_dof:.2g} degrees of freedom; test "
+                    "them one at a time"
+                )
+            statistic, factor, meat = _cr2_wald(
+                families, scores, full_beta[present], rows[:, present], np.isfinite(statistic)
+            )
+            statistic = statistic * (joint_dof / eta)  # Hotelling's scaling, 1 for one row
+            denominator_dof = joint_dof
+            if joint_dof < FEW_DEGREES:
+                warnings.warn(
+                    f"groups=: the test has {joint_dof:.1f} degrees of freedom, fewer than "
+                    f"{FEW_DEGREES}: the tested columns vary across few of the {n_groups} "
+                    "families, and the result rests on those few",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     def spread(weights):
         """Each column's covariance of ``weights @ beta``, ``(columns, q, q)``."""
@@ -1077,10 +1229,19 @@ def local_test(
     standard_errors[:, ~estimable] = np.nan
     estimate = coefficients @ rows.T
     estimate_errors = np.sqrt(np.einsum("kqq->kq", spread(rows)))
-    estimate_errors[:, ~_estimable(matrix, rows)] = np.nan
-    if codes is not None:
-        # Rows touching a column of zeros are not estimable; the rest read the sandwich.
-        estimate_errors[:, np.any(rows[:, ~present] != 0, axis=1)] = np.nan
+    # Rows touching a column of zeros are not estimable with groups=; the rest read the sandwich.
+    row_estimable = _estimable(matrix, rows) & ~np.any(rows[:, ~present] != 0, axis=1)
+    estimate_errors[:, ~row_estimable] = np.nan
+    interval_dof = denominator_dof
+    coefficient_dof = np.where(estimable, float(denominator_dof), np.nan)
+    if kind == "CR2":
+        # Each row and each coefficient on its own Bell and McCaffrey degrees of
+        # freedom; a coefficient only one family estimates has no CR2 error at all.
+        interval_dof = np.where(row_estimable, families.degrees(tested_rows), np.nan)
+        reach = np.eye(n_terms)[:, present] @ families.factor
+        unseen = families.unseen(reach)
+        standard_errors[:, unseen] = np.nan
+        coefficient_dof = np.where(estimable & present & ~unseen, families.degrees(reach), np.nan)
     with np.errstate(divide="ignore", invalid="ignore"):
         partial_r2 = np.where(np.isfinite(statistic), (reduced_ss - full_ss) / reduced_ss, np.nan)
 
@@ -1133,14 +1294,17 @@ def local_test(
         method=method,
         permutations=permutations,
         terms=tuple(int(t) for t in tested),
-        groups=n_groups,
+        n_groups=n_groups,
         names=tuple(named.names) if named is not None else (),
         contrast=hypothesis,
         estimate=estimate,
         estimate_errors=estimate_errors,
         standard_errors=standard_errors,
-        interval_dof=denominator_dof,
+        interval_dof=interval_dof,
         partial_r2=partial_r2,
+        df=float(denominator_dof),
+        vcov=kind,
+        coefficient_dof=coefficient_dof,
     )
 
 
@@ -1184,6 +1348,180 @@ def _clustered_wald(matrix, scores, beta, codes, n_groups, weights, testable):
             continue
         statistic[k] = float(tested_beta[k] @ solved) / q
     return statistic, factor, meat
+
+
+class _Families:
+    """What the CR2 test needs of the design and the families: computed once, used for every column.
+
+    With ``X D^-1 = U S V'`` (unit-norm columns, full column rank) the hat
+    matrix is ``U U'``, a family's block of it ``U_g U_g'``, and ``A = D^-1 V
+    S^-1`` gives ``X_g A = U_g`` and ``A A' = (X'X)^-1``. Each family's
+    adjustment is ``A_g = (I - U_g U_g')^(-1/2)``, a pseudo-inverse square
+    root: an eigenvalue at or below 1e-12 counts as zero, as clubSandwich
+    counts it. Its eigenvectors there are directions the design fits inside
+    the family alone -- a vector on its subjects that lies in the design's span
+    -- which the residuals never carry. Kept for every family: ``U_g' A_g``,
+    and ``T_g = U_g' A_g U_g`` and ``Q_g = U_g' A_g^2 U_g``, from which the
+    degrees of freedom are built. Families are handled a size at a time, as
+    stacks of small matrices.
+    """
+
+    def __init__(self, matrix, codes, n_groups):
+        norms, left, singular, right = _scaled_svd(matrix)  # of full column rank here
+        self.matrix = matrix
+        self.factor = (right.T / singular) / norms[:, None]
+        rank = singular.size
+        sizes = np.bincount(codes, minlength=n_groups)
+        order = np.argsort(codes, kind="stable")
+        starts = np.cumsum(sizes) - sizes
+        self.blocks = []  # (members, U_g' A_g) for the families of each size
+        shrink, square, blind = [], [], []
+        for size in np.unique(sizes):
+            members = order[starts[sizes == size][:, None] + np.arange(size)]
+            u = left[members]  # (families, size, rank)
+            values, vectors = np.linalg.eigh(np.eye(size) - u @ u.transpose(0, 2, 1))
+            kept = values > _NULL_EIGENVALUE
+            root = np.zeros_like(values)
+            root[kept] = 1.0 / np.sqrt(values[kept])
+            adjust = np.einsum("gij,gj,gkj->gik", vectors, root, vectors)
+            weights = u.transpose(0, 2, 1) @ adjust  # U_g' A_g, (families, rank, size)
+            self.blocks.append((members, weights))
+            shrink.append(weights @ u)
+            square.append(weights @ weights.transpose(0, 2, 1))
+            # v' U_g for each direction v the family's residuals cannot carry
+            blind.append(np.einsum("gij,gik->gjk", vectors, u)[~kept])
+        self.shrink = np.concatenate(shrink)  # T_g
+        self.square = np.concatenate(square)  # Q_g
+        self.blind = np.concatenate(blind).reshape(-1, rank)
+
+    def meat(self, residual):
+        """``sum_g (U_g' A_g e_g)(U_g' A_g e_g)'`` for every column: ``(columns, rank, rank)``.
+
+        A block of columns at a time, so that the families' contributions never
+        hold more than about ``_BLOCK_ELEMENTS`` values.
+        """
+        rank = self.factor.shape[1]
+        columns = residual.shape[1]
+        meat = np.zeros((columns, rank, rank))
+        for members, weights in self.blocks:
+            step = max(1, _BLOCK_ELEMENTS // (members.size * rank))
+            for start in range(0, columns, step):
+                block = slice(start, start + step)
+                contributions = weights @ residual[:, block][members]  # (families, rank, block)
+                meat[block] += np.einsum("gik,gjk->kij", contributions, contributions)
+        return meat
+
+    def unseen(self, rows) -> np.ndarray:
+        """Which rows ``r`` of ``r @ U'``-weights one family's subjects alone estimate, in part.
+
+        Such a row's estimate leans on a direction the design fits inside one
+        family, ``v``, by ``v' U_g r'``: the residuals carry nothing of it, so no
+        cluster-robust error sees that part of the variance. This is exactly when
+        ``c @ beta``, for ``r = c A``, cannot be estimated from the other families'
+        subjects.
+        """
+        rows = np.atleast_2d(rows)
+        if not self.blind.size:
+            return np.zeros(rows.shape[0], dtype=bool)
+        loading = np.abs(self.blind @ rows.T)
+        return (loading > 1e-8 * np.linalg.norm(rows, axis=1)).any(axis=0)
+
+    def hotelling(self, rows) -> float:
+        """Hotelling's ``eta`` for ``rows`` tested together; for one row, Bell and McCaffrey's df.
+
+        Under a working model of independent errors of equal variance, ``C V C'``
+        is ``sum_g P_g' e e' P_g`` with ``P_g = (I - H)_(.g) A_g U_g R'`` for
+        ``R = C A``; the covariance of family ``g``'s part with family ``h``'s is
+        ``Omega_gh = delta_gh R Q_g R' - (R T_g)(R T_h)'``. Normalized by
+        ``W = sum_g Omega_gg``, the expected ``C V C'``, Pustejovsky and Tipton
+        (2018) take ``eta = q (q + 1) / sum_st Var(d_st)``, the summed
+        variances of ``W^(-1/2) C V C' W^(-1/2)``'s entries, which are
+        ``sum_gh (tr Omega_gh)^2 + tr(Omega_gh^2)`` here; for one row it is
+        Satterthwaite's ``(sum_g Omega_gg)^2 / sum_gh Omega_gh^2``. The sums
+        over pairs of families come from ``sum_g`` of products of the ``R T_g``,
+        never a ``G x G`` matrix.
+        """
+        rows = np.atleast_2d(rows)
+        q = rows.shape[0]
+        if q == 1:
+            return float(self.degrees(rows)[0])
+        reach = rows @ self.shrink  # R T_g, (families, q, rank)
+        spread = rows @ self.square @ rows.T  # R Q_g R'
+        expected = spread.sum(axis=0) - np.einsum("gai,gbi->ab", reach, reach)
+        values, vectors = np.linalg.eigh((expected + expected.T) / 2)
+        if not values.min() > 1e-12 * max(values.max(), 1e-300):
+            return np.nan
+        root = (vectors / np.sqrt(values)) @ vectors.T  # W^(-1/2)
+        reach = np.einsum("ab,gbj->gaj", root, reach)
+        spread = np.einsum("ab,gbc,cd->gad", root, spread, root)
+        joint = np.einsum("gab,gcd->abcd", reach, reach)
+        across = np.sum(joint * joint) + np.einsum("abcd,cbad->", joint, joint)
+        size = np.einsum("gab,gab->g", reach, reach)
+        trace = np.einsum("gaa->g", spread)
+        within = np.sum(trace * trace - 2.0 * trace * size) + np.sum(
+            np.einsum("gab,gba->g", spread, spread)
+            - 2.0 * np.einsum("gab,gbc,gac->g", spread, reach, reach)
+        )
+        return q * (q + 1) / (across + within)
+
+    def degrees(self, rows) -> np.ndarray:
+        """Bell and McCaffrey's degrees of freedom of each row on its own: ``(rows,)``.
+
+        :meth:`hotelling` for one row, every row at once: with ``f_g = r T_g``
+        and ``e_g = r Q_g r'``, ``(sum_g e_g - |f_g|^2)^2`` over ``sum_g e_g^2 -
+        2 e_g |f_g|^2`` plus ``|sum_g f_g' f_g|^2``. ``NaN`` for a row of zeros.
+        """
+        rows = np.atleast_2d(rows)
+        reach = rows @ self.shrink  # (families, rows, rank)
+        spread = np.sum((rows @ self.square) * rows, axis=-1)  # (families, rows)
+        size = np.sum(reach * reach, axis=-1)
+        expected = spread.sum(axis=0) - size.sum(axis=0)
+        stacked = reach.transpose(1, 2, 0)  # (rows, rank, families)
+        joint = stacked @ stacked.transpose(0, 2, 1)
+        squares = (
+            np.sum(spread * spread, axis=0)
+            - 2.0 * np.sum(spread * size, axis=0)
+            + np.sum(joint * joint, axis=(1, 2))
+        )
+        # expected is |r|^2 when no family's residuals miss a direction, and r = 0 has none
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(
+                expected > 1e-12 * np.sum(rows * rows, axis=1),
+                expected * expected / squares,
+                np.nan,
+            )
+
+
+def _cr2_wald(families, scores, beta, weights, testable):
+    """Wald F statistics with Bell and McCaffrey's CR2 errors, and the sandwich's factors.
+
+    As :func:`_clustered_wald`, with each family's residuals adjusted by its
+    ``A_g`` (:class:`_Families`) and no small-sample factor: the coefficients'
+    covariance is ``A M_U A'``, ``M_U`` summing ``(U_g' A_g e_g)(U_g' A_g
+    e_g)'``. Returns the statistics, ``b' V^-1 b / q``, ``A`` and ``M_U``.
+    """
+    residual = scores - families.matrix @ beta
+    meat = families.meat(residual)
+    reach = weights @ families.factor
+    block = np.einsum("qi,kij,rj->kqr", reach, meat, reach)
+    tested_beta = beta.T @ weights.T  # (columns, q)
+    q = weights.shape[0]
+    statistic = np.full(scores.shape[1], np.nan)
+    columns = np.flatnonzero(testable)
+    if q == 1:  # b^2 / v, every column at once
+        variance = block[columns, 0, 0]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            statistic[columns] = np.where(
+                variance > 0, tested_beta[columns, 0] ** 2 / variance, np.nan
+            )
+        return statistic, families.factor, meat
+    for k in columns:
+        try:
+            solved = np.linalg.solve(block[k], tested_beta[k])
+        except np.linalg.LinAlgError:
+            continue
+        statistic[k] = float(tested_beta[k] @ solved) / q
+    return statistic, families.factor, meat
 
 
 # --- test-retest -------------------------------------------------------------------
