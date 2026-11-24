@@ -1414,84 +1414,128 @@ def mesh_symmetries(vertices, faces, tolerance: float = 1e-3):
 #: route is then the faster one.
 SPARSE_PRODUCT_FRACTION = 0.3
 
-_SHELLS: list | None = None
-_SPINS: list | None = None
+SCAN_REACH = 44.0
+"""How far, in degrees, the rotation search's scan reaches from each of the 60 icosahedral
+rotations: every rotation lies within 43.7 degrees of one of them."""
+
+SCAN_SPACING = 18.0
+"""Side, in degrees, of the cell of the body-centred cubic lattice of rotation vectors the scan
+places within :data:`SCAN_REACH` of the identity, 113 of them: composed with the 60
+icosahedral rotations, they leave no rotation more than 12.5 degrees from one scanned (6.6 at
+the median, of 20,000 random rotations)."""
+
+SCAN_LEVEL = 3
+"""The finest icosphere level whose vertices the scan scores rotations on: the level below the
+grid's own, at least 2 and at most this, so 642 of ico4's 2,562 vertices a hemisphere and 162
+of ico3's; an ico2 grid is scored whole."""
+
+SCAN_CANDIDATES = 8
+"""How many of the scan's best rotations, each at least :data:`SCAN_APART` from the others,
+the rotation search polishes on each hemisphere."""
+
+SCAN_APART = 25.0
+"""Degrees between the rotations the scan hands on to be polished."""
+
+FINE_STEPS = (1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625)
+"""The turns, in degrees, by which the rotation search polishes the pair it chooses, on every
+vertex pair."""
+
+FINALISTS = 4
+"""How many polished rotations of each hemisphere, with the unturned hemisphere, the rotation
+search scores in pairs over the whole density, the block across the hemispheres included."""
+
+_LATTICE: np.ndarray | None = None
 
 
-def rotation_shells():
-    """The reference's rotation search schedule, regenerated from ``create_search_schedule``.
+def scan_rotations() -> np.ndarray:
+    """The turns the rotation search composes with each of the 60 icosahedral rotations.
 
-    Caps of 20, 10, 5, 2.5 and 1 degrees about ``+z``, sampled by icospheres
-    of subdivision 4, 4, 5, 6 and 7; each direction gives the rotation taking
-    ``z`` to it, plus an appended identity; 5, 3, 1, 1 and 1 candidates are
-    kept after each shell. Returns ``[(rotations (n, 3, 3), keep), ...]``.
+    Rotation vectors on a body-centred cubic lattice whose cell's side is
+    :data:`SCAN_SPACING`, out to :data:`SCAN_REACH` from the identity, which
+    is among them. Composed with the 60 icosahedral rotations they leave no
+    rotation more than 12.5 degrees from one of them. Returns ``(n, 3, 3)``,
+    made once and kept, and handed out as a copy.
     """
-    global _SHELLS
-    if _SHELLS is not None:
-        return [(r.copy(), k) for r, k in _SHELLS]
-    schedule = [(20.0, 4, 5), (10.0, 4, 3), (5.0, 5, 1), (2.5, 6, 1), (1.0, 7, 1)]
-    z = np.array([0.0, 0.0, 1.0])
-    shells = []
-    for radius, subdivision, keep in schedule:
-        directions, _ = icosphere(subdivision)
-        inside = np.arccos(np.clip(directions[:, 2], -1.0, 1.0)) <= np.radians(radius)
-        rotations = []
-        for target in directions[inside]:
-            angle = float(np.arccos(np.clip(z @ target, -1.0, 1.0)))
-            k = np.cross(z, target)
-            norm = np.linalg.norm(k)
-            if angle < 1e-12 or norm < 1e-12:
-                rotations.append(np.eye(3))
-                continue
-            k = k / norm
-            kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
-            rotations.append(np.eye(3) + np.sin(angle) * kx + (1 - np.cos(angle)) * (kx @ kx))
-        rotations.append(np.eye(3))
-        shells.append((np.stack(rotations), keep))
-    _SHELLS = shells
-    return [(r.copy(), k) for r, k in shells]
+    global _LATTICE
+    if _LATTICE is None:
+        from scipy.spatial.transform import Rotation
+
+        side = np.radians(SCAN_SPACING)
+        reach = np.radians(SCAN_REACH)
+        count = int(np.ceil(reach / side)) + 1
+        steps = np.arange(-count, count + 1) * side
+        corners = np.stack(np.meshgrid(steps, steps, steps, indexing="ij"), axis=-1).reshape(-1, 3)
+        vectors = np.vstack([corners, corners + side / 2.0])
+        vectors = vectors[np.linalg.norm(vectors, axis=1) <= reach]
+        # the identity first, then outward: the order the scan scores them in
+        vectors = vectors[np.argsort(np.linalg.norm(vectors, axis=1), kind="stable")]
+        _LATTICE = Rotation.from_rotvec(vectors).as_matrix()
+    return _LATTICE.copy()
 
 
-def spin_shells():
-    """Turns about ``+z`` to go with :func:`rotation_shells`: what its caps cannot reach.
+def _turn_between(first, second) -> float:
+    """The angle, in radians, of the rotation that takes ``first`` to ``second``."""
+    cosine = (float(np.trace(first.T @ second)) - 1.0) / 2.0
+    return float(np.arccos(np.clip(cosine, -1.0, 1.0)))
 
-    Every rotation in a cap takes ``z`` to a nearby direction, about an axis
-    perpendicular to ``z``, so no shell turns anything about ``z`` itself: on
-    ico3 an 8-degree rotation about ``z`` was left 9.4 and 8.0 degrees off,
-    one about ``x`` 0.07, one about a tilted axis 3.3 and 3.0 (PORTING.md item
-    18; until October 2026). Shell for
-    shell, these are the turns about ``z`` within the cap's radius, spaced as
-    the cap's directions are (the mean edge of its icosphere), plus the
-    identity; :meth:`ConSEAL._rigid` tries them after each shell's directions.
-    Returns ``[rotations (n, 3, 3), ...]``. They are made once and kept, as
-    :func:`rotation_shells` keeps its own: made again for every subject, they took
-    3 s of each registration that began with ``init_rotation=True`` (2.95 s on an
-    Intel Xeon Gold 6140).
+
+def _coarse_vertices(grid, group, tolerance: float = 1e-3):
+    """Indices of the grid's vertices of a coarser icosphere level, or of every vertex.
+
+    The level is the one below the grid's, at least 2 and at most :data:`SCAN_LEVEL`.
+    The bundled ico4 sphere and :func:`icosphere` list each level's vertices
+    before the next level's, so the first ``10 * 4**level + 2`` form that
+    level, which the icosahedral rotations ``group`` map onto themselves
+    (within 1.6e-4 on the bundled sphere). A grid of ico2 or coarser is sampled
+    whole, as is one whose vertices are not so listed.
     """
-    global _SPINS
-    if _SPINS is not None:
-        return [r.copy() for r in _SPINS]
-    shells = []
-    for radius, subdivision, _keep in [
-        (20.0, 4, 5),
-        (10.0, 4, 3),
-        (5.0, 5, 1),
-        (2.5, 6, 1),
-        (1.0, 7, 1),
-    ]:
-        vertices, faces = icosphere(subdivision)
-        edges = vertices[faces[:, 0]] * vertices[faces[:, 1]]
-        spacing = float(np.degrees(np.arccos(np.clip(edges.sum(axis=1), -1.0, 1.0)).mean()))
-        steps = int(radius // spacing)
-        rotations = [np.eye(3)]
-        for angle in np.radians(spacing * np.arange(-steps, steps + 1)):
-            if angle == 0.0:
-                continue
-            cos, sin = np.cos(angle), np.sin(angle)
-            rotations.append(np.array([[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]]))
-        shells.append(np.stack(rotations))
-    _SPINS = shells
-    return [r.copy() for r in shells]
+    from scipy.spatial import cKDTree
+
+    n = grid.n_vertices
+    own = int(round(np.log((n - 2) / 10.0) / np.log(4.0))) if n > 12 else 0
+    level = min(SCAN_LEVEL, max(2, own - 1))
+    count = 10 * 4**level + 2
+    if n != 10 * 4**own + 2 or count >= n:
+        return np.arange(n)
+    points = grid.vertices[:count]
+    tree = cKDTree(points)
+    for rotation in group:
+        distance, _ = tree.query(points @ rotation.T)
+        if distance.max() > tolerance:
+            return np.arange(n)
+    return np.arange(count)
+
+
+def _polish(score, rotation, steps, best=None):
+    """Turn ``rotation`` about the coordinate axes while ``score`` falls; ``(rotation, score)``.
+
+    A compass search: for each step of ``steps``, in degrees, the six turns
+    about the three axes are tried, the first that lowers the score is taken
+    and tried first again, until none does. Only comparisons of scores steer
+    it, so a score that differs by rounding, as on the GPU, makes the same
+    moves unless two turns score within rounding of each other. ``best`` is
+    the score of ``rotation``, when known.
+    """
+    from scipy.spatial.transform import Rotation
+
+    if best is None:
+        best = score(rotation)
+    order = list(range(6))
+    for step in steps:
+        turns = Rotation.from_rotvec(np.radians(step) * np.vstack([np.eye(3), -np.eye(3)]))
+        turns = turns.as_matrix()
+        for _ in range(200):  # each move lowers the score; the bound only guards the loop
+            for k in order:
+                trial = turns[k] @ rotation
+                value = score(trial)
+                if value < best:
+                    rotation, best = trial, value
+                    order.remove(k)
+                    order.insert(0, k)
+                    break
+            else:
+                break
+    return rotation, best
 
 
 # --- registration ---------------------------------------------------------------
@@ -1815,115 +1859,251 @@ class ConSEAL:
     # -- rigid initialization ---------------------------------------------------------
 
     @staticmethod
-    def _pull_back(values, grid: SphericalGrid, query: MeshQuery, rotation):
-        """``rotate_matrix_barycentric`` on one hemisphere: ``g(x) = values(R x)``.
+    def _interpolation(values, grid: SphericalGrid, query: MeshQuery, rotation, at=None):
+        """The operator that takes a function on ``grid`` to its values at ``R x``.
 
-        CuPy ``values`` are pulled back on the GPU: the rotated vertices located there,
-        which finds the CPU's faces and weights bit for bit, each row's three entries in
-        the order SciPy keeps them, and the products added along each row in turn.
+        A row for each vertex ``x``, or for each of the vertices ``at``, holding
+        the barycentric weights of ``R x``. Made where ``values`` are: for CuPy
+        ``values`` the rotated vertices are located on the GPU, which finds the
+        CPU's faces and weights bit for bit, and each row's three entries are
+        kept in the order SciPy's CSR keeps them.
         """
-        n = grid.n_vertices
+        points = (grid.vertices if at is None else grid.vertices[at]) @ rotation.T
+        rows, n = points.shape[0], grid.n_vertices
         if _device.on_device(values):
             cp = _device.cupy()
-            weights, indices, _ = query.query_faces(cp.asarray(grid.vertices @ rotation.T))
+            weights, indices, _ = query.query_faces(cp.asarray(points))
             order = cp.argsort(indices, axis=1)  # SciPy's CSR sorts each row by column
-            operator = _device.sparse_module("gpu").csr_matrix(
+            return _device.sparse_module("gpu").csr_matrix(
                 (
                     cp.take_along_axis(weights, order, axis=1).ravel(),
                     cp.take_along_axis(indices, order, axis=1).ravel().astype(cp.int32),
-                    cp.arange(0, 3 * n + 1, 3, dtype=cp.int32),
+                    cp.arange(0, 3 * rows + 1, 3, dtype=cp.int32),
                 ),
-                shape=(n, n),
+                shape=(rows, n),
             )
-            halfway = _device.rows_times_dense(operator, values)
-            return _device.rows_times_dense(operator, halfway.T).T
         from scipy import sparse
 
-        weights, indices, _ = query.query_faces(grid.vertices @ rotation.T)
-        operator = sparse.csr_matrix(
-            (weights.ravel(), (np.repeat(np.arange(n), 3), indices.ravel())), shape=(n, n)
+        weights, indices, _ = query.query_faces(points)
+        return sparse.csr_matrix(
+            (weights.ravel(), (np.repeat(np.arange(rows), 3), indices.ravel())), shape=(rows, n)
         )
-        halfway = sparse_times_dense(operator, values)
-        return sparse_times_dense(operator, halfway.T).T
+
+    @staticmethod
+    def _sandwich(left, values, right):
+        """``left @ values @ right.T`` as two sparse products; ``None`` stands for the identity.
+
+        Each product adds a row's terms in turn, on the GPU as on the CPU (:func:`_times`).
+        """
+        halfway = values if left is None else _times(left, values)
+        return halfway if right is None else _times(right, halfway.T).T
+
+    @staticmethod
+    def _pull_back(values, grid: SphericalGrid, query: MeshQuery, rotation, at=None):
+        """``rotate_matrix_barycentric`` on one hemisphere: ``g(x, y) = values(R x, R y)``.
+
+        With ``at``, only for the vertices ``at``, a ``(len(at), len(at))`` block. CuPy
+        ``values`` are pulled back on the GPU (:meth:`_interpolation`).
+        """
+        operator = ConSEAL._interpolation(values, grid, query, rotation, at)
+        return ConSEAL._sandwich(operator, values, operator)
+
+    def _squares(self, difference, rows, cols) -> float:
+        """What :meth:`cost` makes of one block of a difference, its rows and columns given."""
+        squares = difference**2
+        if self.area_weighted:
+            return float(self._areas[rows] @ squares @ self._areas[cols])
+        return float(squares.sum())
+
+    def _flattener(self, count: int, weights):
+        """A ``(count, count)`` symmetric block as a vector whose squared norm is its squares.
+
+        The upper triangle, the entries off the diagonal scaled by the square root
+        of two, and by the square root of their two vertices' ``weights`` when
+        those are given.
+        """
+        rows, cols = np.triu_indices(count)
+        scale = np.where(rows == cols, 1.0, np.sqrt(2.0))
+        if weights is not None:
+            scale = scale * np.sqrt(weights[rows] * weights[cols])
+        rows, cols, scale = (_device.to_device(a, self.device) for a in (rows, cols, scale))
+
+        def flat(values):
+            return values[rows, cols] * scale
+
+        return flat
+
+    def _scan(self, target, block, grid, query, sample, flat, group) -> list:
+        """The best rotations of the scan, far enough apart, best first.
+
+        Every rotation of :func:`scan_rotations` composed with each of the 60
+        icosahedral rotations ``group``, scored on the pairs of the vertices
+        ``sample``. Both blocks are pulled back by interpolation: the target
+        through each element of the group, the moving block through each
+        rotation of the lattice, at the sample, which the group maps onto
+        itself. So ``||T(G y) - B(C y)||^2`` over the sample is the cost of
+        the turn ``C G'``, and the costs of all the turns are a few matrix
+        products. The target's 60 pulled-back blocks are held, 99 MB on ico4,
+        and the lattice's in chunks of at most 80 MB.
+        """
+        xp = self._xp
+        turns = scan_rotations()
+        width = sample.size * (sample.size + 1) // 2  # the entries flat() keeps
+        targets = xp.empty((group.shape[0], width))
+        for row, element in enumerate(group):
+            targets[row] = flat(self._pull_back(target, grid, query, element, sample))
+        target_norms = xp.einsum("ij,ij->i", targets, targets)
+        costs = np.empty((group.shape[0], turns.shape[0]))
+        chunk = max(1, min(turns.shape[0], 10_000_000 // width))
+        blocks = xp.empty((chunk, width))
+        for first in range(0, turns.shape[0], chunk):
+            last = min(first + chunk, turns.shape[0])
+            for row, turn in enumerate(turns[first:last]):
+                blocks[row] = flat(self._pull_back(block, grid, query, turn, sample))
+            part = blocks[: last - first]
+            norms = xp.einsum("ij,ij->i", part, part)
+            costs[:, first:last] = _device.to_host(
+                target_norms[:, None] + norms[None, :] - 2.0 * (targets @ part.T)
+            )
+        # costs[g, s] is the turn turns[s] @ group[g].T
+        rotations = np.einsum("sij,gkj->gsik", turns, group).reshape(-1, 3, 3)
+        costs = costs.ravel()
+        open_ = np.isfinite(costs)
+        picked = []
+        while len(picked) < SCAN_CANDIDATES and open_.any():
+            index = int(np.flatnonzero(open_)[np.argmin(costs[open_])])
+            picked.append(rotations[index])
+            cosines = (np.einsum("nij,ij->n", rotations, rotations[index]) - 1.0) / 2.0
+            open_ &= np.arccos(np.clip(cosines, -1.0, 1.0)) >= np.radians(SCAN_APART)
+        return picked
 
     def _rigid(self, q1, moving: EndpointConnectome, kernel, verbose: bool = False):
-        """``initial_registration``: a multi-shell rotation search, per hemisphere."""
+        """``initial_registration``: a rotation for each hemisphere, from among all rotations.
+
+        Each hemisphere's block of the moving density is turned onto the fixed
+        one's in four steps, the third choosing the two hemispheres' turns
+        together:
+
+        1. a scan of every rotation to within 12.5 degrees -- the 60
+           icosahedral rotations, each composed with the rotations within
+           :data:`SCAN_REACH` of the identity (:func:`scan_rotations`) --
+           scored on the pairs of a coarse icosphere's vertices
+           (:data:`SCAN_LEVEL`);
+        2. a polish of the :data:`SCAN_CANDIDATES` best, :data:`SCAN_APART`
+           apart, on those pairs, by turns about the coordinate axes of 8 and
+           4 degrees (:func:`_polish`), and of the :data:`FINALISTS` best of
+           them, 4 degrees apart, by turns of 2 and 1;
+        3. the :data:`FINALISTS` best polished rotations of each hemisphere,
+           and the hemisphere unturned, scored in pairs over the whole
+           density, the block across the hemispheres included: a hemisphere
+           whose own block looks alike after a half-turn -- one bundle, say
+           -- takes the turn the streamlines across agree with;
+        4. the pair chosen, polished on every vertex pair from 1 degree to
+           1/64.
+
+        The costs weigh vertex pairs as :meth:`cost` does, by their areas
+        when ``area_weighted``. The pair is kept only when the cost of the
+        endpoints carried by it is below the starting cost; otherwise the
+        endpoints are left where they were and the warps are identities.
+        Returns ``(lh_warp, rh_warp, kept)``.
+        """
         q2 = moving.q_transform(kernel)
         initial = self.cost(q1 - q2)
         n_left = moving.n_left
-        shells = rotation_shells()
-        # The reference's caps turn nothing about z (spin_shells); each shell's best are
-        # turned about z as well.
-        spins = spin_shells()
-
-        def refine(candidates, rotations, keep, target, block, grid, query):
-            """The ``keep`` best of every candidate composed with every rotation."""
-            costs = np.zeros((len(candidates), rotations.shape[0]))
-            for k, candidate in enumerate(candidates):
-                for s, rotation in enumerate(rotations):
-                    rotated = self._pull_back(block, grid, query, candidate @ rotation)
-                    costs[k, s] = float(((target - rotated) ** 2).sum())
-            order = np.argsort(costs.ravel())[:keep]
-            k_idx, s_idx = np.unravel_index(order, costs.shape)
-            return [candidates[k] @ rotations[s] for k, s in zip(k_idx, s_idx, strict=True)]
-
-        best_pull_back = []
-        hemispheres = (
+        sides = (
             (moving.lh_grid, slice(0, n_left), moving._query[0]),
             (moving.rh_grid, slice(n_left, moving.n_vertices), moving._query[1]),
         )
-        xp = self._xp
-        for grid, rows, query in hemispheres:
-            # a hemisphere's blocks, searched where the engine computes; the candidates,
-            # 3 x 3 rotations, are kept and composed on the CPU either way
+        areas = _device.to_host(self._areas) if self.area_weighted else None
+        finalists = []
+        for grid, rows, query in sides:
+            # a hemisphere's blocks, searched where the engine computes; the rotations,
+            # 3 x 3 matrices, are kept and composed on the CPU either way
             target, block = q1[rows, rows], q2[rows, rows]
             group, _ = icosahedral_rotations(grid.vertices, grid.faces)
+            sample = _coarse_vertices(grid, group)
+            flat = self._flattener(sample.size, None if areas is None else areas[rows][sample])
+            at = _device.to_device(sample, self.device)
+            coarse_target = flat(target[at][:, at])
 
-            # shell 1: every shell rotation combined with the 60 icosahedral
-            # rotations. Both sides are transported by barycentric pull-back: on
-            # an exact icosphere that is the reference's vertex permutation
-            # (weights 1, 0, 0), and on the bundled FreeSurfer sphere, which is
-            # 1.7e-4 off one, it is the rotated function rather than a gather.
-            # ||T.g - B.r||^2 expands into two norms and one inner product, so
-            # the 60 x 80 costs are a few matrix products; the rotations are
-            # chunked so that at most ~1 GB of transported blocks is held.
-            rotations, keep = shells[0]
-            costs = np.zeros((group.shape[0], rotations.shape[0]))
-            chunk = max(1, min(rotations.shape[0], int(1.2e8) // max(target.size, 1)))
-            for first in range(0, rotations.shape[0], chunk):
-                rotated = xp.stack(
-                    [
-                        self._pull_back(block, grid, query, rotation).ravel()
-                        for rotation in rotations[first : first + chunk]
-                    ]
+            def coarse(
+                rotation,
+                block=block,
+                grid=grid,
+                query=query,
+                sample=sample,
+                flat=flat,
+                coarse_target=coarse_target,
+            ):
+                pulled = flat(self._pull_back(block, grid, query, rotation, sample))
+                return float(((coarse_target - pulled) ** 2).sum())
+
+            candidates = self._scan(target, block, grid, query, sample, flat, group)
+            # every candidate polished to 4 degrees, then the best, distinct, to 1
+            polished = [(rotation, None) for rotation in candidates]
+            for steps, apart in (((8.0, 4.0), 4.0), ((2.0, 1.0), 1.0)):
+                polished = [_polish(coarse, rotation, steps, best) for rotation, best in polished]
+                polished.sort(key=lambda pair: pair[1])  # stable: ties keep the scan's order
+                distinct = []
+                for rotation, cost in polished:
+                    if all(
+                        _turn_between(rotation, other) > np.radians(apart) for other, _ in distinct
+                    ):
+                        distinct.append((rotation, cost))
+                polished = distinct[:FINALISTS]
+            # None: the hemisphere unturned
+            finalists.append([None, *(rotation for rotation, _ in polished)])
+
+        # the pairs, scored over the whole density
+        (lh_grid, lh_rows, lh_query), (rh_grid, rh_rows, rh_query) = sides
+        operators = [
+            [None if r is None else self._interpolation(q2, g, q, r) for r in rotations]
+            for (g, _, q), rotations in zip(sides, finalists, strict=True)
+        ]
+        own = [
+            [
+                self._squares(q1[rows, rows] - self._sandwich(op, q2[rows, rows], op), rows, rows)
+                for op in ops
+            ]
+            for (_, rows, _), ops in zip(sides, operators, strict=True)
+        ]
+        across_target, across = q1[lh_rows, rh_rows], q2[lh_rows, rh_rows]
+        totals = np.empty((len(operators[0]), len(operators[1])))
+        for i, left in enumerate(operators[0]):
+            halfway = self._sandwich(left, across, None)
+            for j, right in enumerate(operators[1]):
+                pulled = self._sandwich(None, halfway, right)
+                mismatch = self._squares(across_target - pulled, lh_rows, rh_rows)
+                totals[i, j] = own[0][i] + own[1][j] + 2.0 * mismatch
+        best = np.unravel_index(int(np.argmin(totals)), totals.shape)
+        chosen = [finalists[side][best[side]] for side in (0, 1)]
+        if chosen[0] is None and chosen[1] is None:
+            if verbose:
+                print("rigid initialization: no rotation lowers the cost")
+            return (*self.new_warps(), False)
+
+        for side, ((grid, rows, query), rotation) in enumerate(zip(sides, chosen, strict=True)):
+            if rotation is None:
+                continue
+            target, block = q1[rows, rows], q2[rows, rows]
+
+            def fine(rotation, target=target, block=block, grid=grid, rows=rows, query=query):
+                return self._squares(
+                    target - self._pull_back(block, grid, query, rotation), rows, rows
                 )
-                rotated_norm = (rotated**2).sum(axis=1)
-                for g, symmetry in enumerate(group):
-                    pulled = self._pull_back(target, grid, query, symmetry).ravel()
-                    cross = rotated @ pulled
-                    costs[g, first : first + chunk] = _device.to_host(
-                        (pulled @ pulled) + rotated_norm - 2.0 * cross
-                    )
-            order = np.argsort(costs.ravel())[:keep]
-            g_idx, s_idx = np.unravel_index(order, costs.shape)
-            candidates = [rotations[s] @ group[g].T for g, s in zip(g_idx, s_idx, strict=True)]
 
-            here = (target, block, grid, query)
-            candidates = refine(candidates, spins[0], keep, *here)
-            # later shells: refine each candidate with a finer cap, then turn it about z
-            for (rotations, keep), turns in zip(shells[1:], spins[1:], strict=True):
-                candidates = refine(candidates, rotations, keep, *here)
-                candidates = refine(candidates, turns, keep, *here)
-            best_pull_back.append(candidates[0])
+            chosen[side], _ = _polish(fine, rotation, FINE_STEPS)
 
         lh_warp, rh_warp = self.new_warps()
-        lh_warp.rotate(best_pull_back[0].T)
-        rh_warp.rotate(best_pull_back[1].T)
+        for warp, rotation in zip((lh_warp, rh_warp), chosen, strict=True):
+            if rotation is not None:
+                warp.rotate(rotation.T)
         moving.warp(lh_warp, rh_warp)
         final = self.cost(q1 - moving.q_transform(kernel))
         if verbose:
-            print(f"rigid initialization: cost {initial:.6f} -> {final:.6f}")
-        if final > initial:
+            kept = "" if final < initial else ", not kept"
+            print(f"rigid initialization: cost {initial:.6f} -> {final:.6f}{kept}")
+        if not final < initial:  # not lower, or NaN: no turn is kept
             moving.reset()
             return (*self.new_warps(), False)
         return lh_warp, rh_warp, True
@@ -2339,10 +2519,13 @@ def endpoints_align(
         0.009 degrees, where the paper's absolute threshold alone stopped at
         0.07.
     init_rotation
-        Search rotations per hemisphere before the diffeomorphic step. The 60
-        icosahedral rotations are fitted to the grid rather than assumed, and
-        the densities are transported by interpolation, so the search runs on
-        the bundled FreeSurfer sphere, which is an icosphere to 1.7e-4.
+        Search rotations per hemisphere before the diffeomorphic step: every
+        rotation, to within 12.5 degrees, then polished to 1/64 degree,
+        and the two hemispheres' turns chosen together (:meth:`ConSEAL._rigid`).
+        The 60 icosahedral rotations are fitted to the grid rather than
+        assumed, and the densities are transported by interpolation, so the
+        search runs on the bundled FreeSurfer sphere, which is an icosphere to
+        1.7e-4.
     area_weighted
         See :class:`ConSEAL`.
     grids

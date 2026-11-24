@@ -37,7 +37,7 @@ from sbci.conseal import (
     icosphere,
     mesh_symmetries,
     overlap_coefficient,
-    rotation_shells,
+    scan_rotations,
     triangles_fold,
 )
 from sbci.errors import MissingDataError
@@ -435,12 +435,36 @@ def test_an_icosphere_has_sixty_symmetries_in_any_orientation():
     assert rotated.shape[0] == 60
 
 
-def test_the_rotation_schedule_matches_the_reference_counts():
-    shells = rotation_shells()
-    assert [r.shape[0] for r, _ in shells] == [80, 20, 20, 20, 16]
-    assert [k for _, k in shells] == [5, 3, 1, 1, 1]
-    for rotations, _ in shells:
-        assert np.allclose(np.einsum("nij,nkj->nik", rotations, rotations), np.eye(3), atol=1e-9)
+def angles_between(rotations, other):
+    """Degrees of the turn from each of ``rotations`` to ``other``."""
+    cosines = (np.einsum("nij,ij->n", rotations, other) - 1.0) / 2.0
+    return np.degrees(np.arccos(np.clip(cosines, -1.0, 1.0)))
+
+
+def test_the_scan_reaches_every_rotation():
+    """The reference's caps reach 20 degrees from the 60 icosahedral rotations.
+
+    A random rotation lies a median 31 and up to 43.7 degrees from them, so the
+    search missed rotations far from them (A4-01). The scan's turns reach 44
+    degrees from each, on a lattice that leaves no rotation more than 12.5
+    degrees from one scanned.
+    """
+    from scipy.spatial.transform import Rotation
+
+    import sbci.conseal as conseal
+
+    turns = scan_rotations()
+    assert np.array_equal(turns[0], np.eye(3))
+    assert np.allclose(np.einsum("nij,nkj->nik", turns, turns), np.eye(3), atol=1e-12)
+    assert np.allclose(np.linalg.det(turns), 1.0)
+    assert angles_between(turns, np.eye(3)).max() <= conseal.SCAN_REACH + 1e-9
+    group, _ = conseal.icosahedral_rotations(*icosphere(1))
+    scanned = np.einsum("sij,gkj->gsik", turns, group).reshape(-1, 3, 3)
+    probes = Rotation.random(2000, random_state=4).as_matrix()
+    to_group = np.array([angles_between(group, probe).min() for probe in probes])
+    to_scan = np.array([angles_between(scanned, probe).min() for probe in probes])
+    assert to_group.max() < conseal.SCAN_REACH and np.median(to_group) > 25.0
+    assert to_scan.max() < 12.6 and np.median(to_scan) < 7.0
 
 
 # --- registration --------------------------------------------------------------------
@@ -617,9 +641,9 @@ def test_the_rigid_search_recovers_a_rotation(grid, connectome, kernel):
     lh, rh, costs, warped = engine.register(connectome, rotated, k, dk, init_rotation=True)
     assert costs[0] < 0.25 * before
     # the search scores rotations on Q2 interpolated over ico2 triangles, so the
-    # optimum it finds sits a few degrees from the true rotation
+    # optimum it finds sits a little off the true rotation: 0.12 radians was allowed
     recovered = np.arccos(np.clip((lh.vertices * (grid.vertices @ rotation)).sum(1), -1, 1))
-    assert np.abs(recovered).max() < 0.12
+    assert np.degrees(np.abs(recovered).max()) < 0.5
 
 
 def test_the_template_is_a_unit_vector_close_to_the_subjects(grid, kernel):
@@ -1464,14 +1488,11 @@ def test_area_weighting_keeps_the_cost_on_the_plain_sums_scale(grid, connectome,
     assert len(costs) > 3 and costs[-1] < 0.8 * costs[0]
 
 
-def test_the_rigid_search_undoes_a_turn_about_z(grid, connectome, kernel, monkeypatch):
+def test_the_rigid_search_undoes_a_turn_about_z(grid, connectome, kernel):
     """The reference's caps turn about axes perpendicular to z, never about z itself.
 
-    So an 8-degree turn about z is left 9.6 and 8.2 degrees off on this grid; each
-    shell's best are now turned about z as well.
+    So an 8-degree turn about z was left 9.6 and 8.2 degrees off on this grid.
     """
-    import sbci.conseal as conseal
-
     angle = np.radians(8.0)
     truth = np.array(
         [[np.cos(angle), -np.sin(angle), 0.0], [np.sin(angle), np.cos(angle), 0.0], [0, 0, 1]]
@@ -1493,14 +1514,7 @@ def test_the_rigid_search_undoes_a_turn_about_z(grid, connectome, kernel, monkey
     lh, rh, _, _ = ConSEAL(grid, grid, max_iterations=0).register(
         connectome, rotated, k, dk, init_rotation=True
     )
-    assert degrees_left(lh.rigid) < 1.5 and degrees_left(rh.rigid) < 1.5
-    # the reference's search: no turns about z after any shell
-    shells = len(conseal.rotation_shells())
-    monkeypatch.setattr(conseal, "spin_shells", lambda: [np.eye(3)[None]] * shells)
-    lh, rh, _, _ = ConSEAL(grid, grid, max_iterations=0).register(
-        connectome, rotated, k, dk, init_rotation=True
-    )
-    assert degrees_left(lh.rigid) > 5.0 and degrees_left(rh.rigid) > 5.0
+    assert degrees_left(lh.rigid) < 0.5 and degrees_left(rh.rigid) < 0.5
 
 
 # --- the review of 11 October 2026 -------------------------------------------------
@@ -2399,7 +2413,7 @@ def test_the_rigid_search_undoes_a_turn_about_z_the_other_way(grid, connectome, 
         connectome, rotated, k, dk, init_rotation=True
     )
     for rigid in (lh.rigid, rh.rigid):
-        assert np.degrees(np.arccos(np.clip((np.trace(rigid @ truth) - 1) / 2, -1, 1))) < 1.5
+        assert np.degrees(np.arccos(np.clip((np.trace(rigid @ truth) - 1) / 2, -1, 1))) < 0.5
 
 
 def test_the_cutoff_is_the_reference_scan(grid):
@@ -2569,21 +2583,16 @@ def test_endpoints_align_checks_the_template_before_it_builds_the_kernel(
         endpoints_align([made(grid, 1), made(grid, 2)], template=template, grids=(grid, grid))
 
 
-def test_the_turns_about_z_are_made_once(monkeypatch):
-    """Made again for every subject, they took 3 s of each registration from a turn."""
+def test_the_scan_rotations_are_made_once(monkeypatch):
+    """Kept for every subject a search runs on, and handed out as copies."""
     import sbci.conseal as conseal
 
-    first = conseal.spin_shells()
-    made_again = []
-    monkeypatch.setattr(conseal, "icosphere", lambda s: made_again.append(s) or icosphere(s))
-    again = conseal.spin_shells()
-    assert made_again == []  # kept, not made again
-    again[0][0, 0, 0] = 5.0
-    assert conseal.spin_shells()[0][0, 0, 0] == 1.0  # handed out as copies
-    monkeypatch.setattr(conseal, "_SPINS", None)
-    for kept, fresh in zip(first, conseal.spin_shells(), strict=True):
-        np.testing.assert_array_equal(kept, fresh)  # what is kept is what would be made
-    assert made_again == [4, 4, 5, 6, 7]
+    first = conseal.scan_rotations()
+    again = conseal.scan_rotations()
+    again[0, 0, 0] = 5.0
+    assert conseal.scan_rotations()[0, 0, 0] == 1.0  # handed out as copies
+    monkeypatch.setattr(conseal, "_LATTICE", None)
+    np.testing.assert_array_equal(conseal.scan_rotations(), first)  # what is kept is made
 
 
 def test_a_displacement_of_the_velocity_field_is_one_pair_a_vertex(grid):
@@ -2609,3 +2618,145 @@ def test_an_endpoint_warp_names_its_grid_through_save_and_load(grid, tmp_path):
     older = {k: v for k, v in warp.__dict__.items() if k != "grid_digest"}
     np.savez_compressed(tmp_path / "older.npz", **older)
     assert EndpointWarp.load(tmp_path / "older.npz").grid_digest is None
+
+
+# --- the review of 23 November 2026: the rotation search and the descent (A4) -----------
+
+
+def rotation_about(axis, degrees):
+    """The rotation of ``degrees`` about ``axis``."""
+    from scipy.spatial.transform import Rotation
+
+    axis = np.asarray(axis, dtype=np.float64)
+    return Rotation.from_rotvec(np.radians(degrees) * axis / np.linalg.norm(axis)).as_matrix()
+
+
+def degrees_apart(first, second):
+    """Degrees of the turn from one rotation to the other."""
+    cosine = (np.trace(np.asarray(first).T @ np.asarray(second)) - 1.0) / 2.0
+    return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+
+def bundles(grid, layout, seed, turns):
+    """A subject whose bundles run between the centres of ``layout``, and the same turned.
+
+    ``layout`` lists ``(centre_in, centre_out, count, hemisphere_in, hemisphere_out)``;
+    the moving subject's endpoints are turned by ``turns[h]`` on hemisphere ``h``.
+    """
+    rng = np.random.default_rng(seed)
+    p_in, p_out, h_in, h_out = [], [], [], []
+    for start, end, count, side_in, side_out in layout:
+        p_in.append(von_mises(rng, start, 20.0, count))
+        p_out.append(von_mises(rng, end, 20.0, count))
+        h_in += [side_in] * count
+        h_out += [side_out] * count
+    p_in, p_out, h_in, h_out = np.vstack(p_in), np.vstack(p_out), np.array(h_in), np.array(h_out)
+    fixed = EndpointConnectome.from_points(grid, grid, p_in, p_out, h_in, h_out)
+    turn_in = np.where(h_in[:, None] == 0, p_in @ turns[0].T, p_in @ turns[1].T)
+    turn_out = np.where(h_out[:, None] == 0, p_out @ turns[0].T, p_out @ turns[1].T)
+    return fixed, EndpointConnectome.from_points(grid, grid, turn_in, turn_out, h_in, h_out)
+
+
+#: five bundles within each hemisphere and one across: no turn maps a hemisphere's own
+#: block onto itself
+FIVE_BUNDLES = [
+    (start, end, count, side, side)
+    for side, centres in enumerate(np.random.default_rng(99).normal(size=(2, 10, 3)))
+    for (start, end), count in zip(
+        zip(centres[0::2], centres[1::2], strict=True), (1400, 1000, 700, 500, 300), strict=True
+    )
+] + [([0.2, 1.0, -0.4], [0.8, -0.3, 0.5], 800, 0, 1)]
+
+
+def test_the_rigid_search_finds_a_turn_far_from_the_icosahedral_rotations(grid):
+    """The right hemisphere, turned 79.5 degrees, 35.7 from the nearest icosahedral rotation.
+
+    The reference's search reaches 20 degrees from those, and left it 15.5 degrees off, a
+    rotation it kept (A4-01).
+    """
+    truth = (
+        rotation_about([0.0837, -0.5411, -0.8368], 87.869),
+        rotation_about([0.7036, 0.5967, -0.3858], 79.501),
+    )
+    fixed, moving = bundles(grid, FIVE_BUNDLES, seed=12, turns=truth)
+    k, dk = HeatKernelBuilder(grid, grid, degree=12).compute(0.05)
+    lh, rh, _, _ = ConSEAL(grid, grid, max_iterations=0).register(
+        fixed, moving, k, dk, init_rotation=True
+    )
+    for warp, turn in zip((lh, rh), truth, strict=True):
+        assert degrees_apart(warp.rigid, turn.T) < 0.5
+
+
+def test_the_rigid_search_tells_a_half_turn_by_the_streamlines_across(grid):
+    """One bundle within each hemisphere looks alike after the half-turn that swaps its ends.
+
+    Scored hemisphere by hemisphere, turns of 100 and 160 degrees came back 180 degrees off,
+    and were kept (A4-05); the bundle across the hemispheres tells them apart.
+    """
+    layout = [
+        ([-1, 0.3, 0.2], [0.2, -0.9, 0.4], 2000, 0, 0),
+        ([0.5, 0.5, -0.7], [0.1, 0.2, 1.0], 2000, 1, 1),
+        ([0.9, -0.1, 0.3], [-0.2, 0.6, -0.8], 2000, 0, 1),
+    ]
+    truth = (rotation_about([0.2, -0.7, 0.4], 100.0), rotation_about([0.9, 0.1, -0.3], 160.0))
+    fixed, moving = bundles(grid, layout, seed=12, turns=truth)
+    k, dk = HeatKernelBuilder(grid, grid, degree=12).compute(0.05)
+    lh, rh, _, _ = ConSEAL(grid, grid, max_iterations=0).register(
+        fixed, moving, k, dk, init_rotation=True
+    )
+    for warp, turn in zip((lh, rh), truth, strict=True):
+        assert degrees_apart(warp.rigid, turn.T) < 0.5
+
+
+def test_a_turn_no_better_than_the_start_is_refused(grid, connectome, kernel, monkeypatch):
+    """A turn that left the cost where it was was kept: only a rise refused it."""
+    k, dk = kernel
+    real, seen = ConSEAL.cost, []
+
+    def as_at_the_start(self, difference):
+        seen.append(real(self, difference))
+        return seen[0]
+
+    monkeypatch.setattr(ConSEAL, "cost", as_at_the_start)
+    moving = turned(connectome)
+    lh, rh, _, warped = ConSEAL(grid, grid, max_iterations=0).register(
+        connectome, moving, k, dk, init_rotation=True
+    )
+    assert seen[1] < seen[0]  # the turn found lowers the cost, but it is not let
+    assert np.array_equal(lh.rigid, np.eye(3)) and np.array_equal(rh.rigid, np.eye(3))
+    for name in LOCATIONS:
+        np.testing.assert_array_equal(getattr(warped, name), getattr(moving, name))
+
+
+def test_the_rigid_search_weighs_vertex_pairs_as_the_cost_does(grid):
+    """With area_weighted the search scored plain sums, and the weighted cost refused its turn.
+
+    Two bundles a hemisphere, each turned its own way: a light one where the weights are
+    1, a heavy one where they are 0.02. Weighted, the turn that undoes the light bundle is
+    the cost's minimum; the plain sums settle between the two, which the search found and
+    the weighted cost then refused, leaving the hemispheres unturned.
+    """
+    light = ([-1, 0.3, 0.2], [-0.6, -0.7, 0.3], 600)
+    heavy = ([1, 0.2, 0.3], [0.6, -0.5, 0.6], 1800)
+    first, second = rotation_about([1, 0, 0], 12.0), rotation_about([0, 1, 0], 12.0)
+    rng = np.random.default_rng(5)
+    ends, turned_ends, sides = [], [], []
+    for side in (0, 1):
+        for (start, end, count), turn in ((light, first), (heavy, second)):
+            pair = [von_mises(rng, centre, 40.0, count) for centre in (start, end)]
+            ends.append(pair)
+            turned_ends.append([points @ turn.T for points in pair])
+            sides += [side] * count
+    sides = np.array(sides)
+
+    def subject(pairs):
+        p_in, p_out = (np.vstack([pair[i] for pair in pairs]) for i in (0, 1))
+        return EndpointConnectome.from_points(grid, grid, p_in, p_out, sides, sides)
+
+    fixed, moving = subject(ends), subject(turned_ends)
+    k, dk = HeatKernelBuilder(grid, grid, degree=12).compute(0.05)
+    engine = ConSEAL(grid, grid, max_iterations=0, area_weighted=True)
+    weights = np.where(np.vstack([grid.vertices, grid.vertices])[:, 0] < 0, 1.0, 0.02)
+    engine._areas = weights / weights.mean()
+    lh, rh, _, _ = engine.register(fixed, moving, k, dk, init_rotation=True)
+    assert degrees_apart(lh.rigid, first.T) < 1.0 and degrees_apart(rh.rigid, first.T) < 1.0
