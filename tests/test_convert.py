@@ -614,8 +614,8 @@ def run_pipeline_lines(run: Path) -> subprocess.CompletedProcess:
         + PIPELINE_LINES
         + 'echo "rc=$rc"\nexit "$rc"\n'
     )
-    environment = dict(
-        os.environ,
+    environment = {k: v for k, v in os.environ.items() if k != "SBCI_QC_LIMITS"}
+    environment.update(
         OUT=str(run),
         SUBJ=SUBJECT,
         PIPELINE_VERSION=PIPELINE,

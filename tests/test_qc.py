@@ -19,6 +19,13 @@ SUBJECT = "sub-synth02"
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _no_installed_limits(monkeypatch):
+    """Limits come only from where a test puts them: none from the environment or the package."""
+    monkeypatch.delenv(quality.LIMITS_ENVIRONMENT, raising=False)
+    monkeypatch.setattr(quality, "LIMITS_RESOURCE", "no_limits_in_the_tests.json")
+
+
 @pytest.fixture(scope="module")
 def files(tmp_path_factory) -> tuple[Path, Path]:
     """A made-up subject's two files, on the real grid."""
