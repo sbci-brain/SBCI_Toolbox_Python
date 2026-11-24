@@ -1387,3 +1387,18 @@ def test_cr2_by_blocks_of_columns_matches_one_pass(monkeypatch):
     blocks = local_test(scores, X, terms=[4], add_intercept=False, groups=families)
     np.testing.assert_allclose(blocks.statistic, whole.statistic, rtol=1e-13)
     np.testing.assert_allclose(blocks.standard_errors, whole.standard_errors, rtol=1e-13)
+
+
+def test_cr2_with_a_family_for_each_subject_is_hc2():
+    """Families of one: CR2 is MacKinnon and White's HC2, each residual over sqrt(1 - h_ii)."""
+    rng = np.random.default_rng(9)
+    n = 60
+    X = np.column_stack([np.ones(n), rng.standard_normal(n), rng.exponential(size=n)])
+    y = rng.standard_normal((n, 3)) * (1 + X[:, [2]])
+    result = local_test(y, X, terms=[2], add_intercept=False, groups=np.arange(n))
+    bread = np.linalg.inv(X.T @ X)
+    leverage = np.einsum("ij,jk,ik->i", X, bread, X)
+    for k in range(3):
+        residual = y[:, k] - X @ (bread @ X.T @ y[:, k])
+        hc2 = bread @ (X.T * (residual**2 / (1 - leverage))) @ X @ bread
+        np.testing.assert_allclose(result.standard_errors[k], np.sqrt(np.diag(hc2)), rtol=1e-12)
