@@ -34,7 +34,7 @@ def test_a_well_formed_file_passes_every_grid_independent_check(tmp_path, connec
     assert results["name"]
     assert results["metadata"]
     assert results["shapes"]
-    assert results["symmetry"]
+    assert results["storage"]
     assert results["nonnegativity"]
     assert results["unit mass"]
     assert results["mask"]
@@ -163,7 +163,7 @@ def test_the_stored_dtype_is_checked_on_disk(tmp_path, connectome):
         data = handle["connectivity"][()].astype(np.float64)
         del handle["connectivity"]
         handle.create_dataset("connectivity", data=data)
-    assert not _results(validate_file(path))["symmetry"]
+    assert not _results(validate_file(path))["storage"]
 
 
 def test_a_small_relative_leak_onto_the_wall_fails(tmp_path, connectome):
@@ -396,7 +396,8 @@ def test_fractional_endpoint_indices_in_a_file_are_refused(example_files, tmp_pa
         ("mass 1 + 2e-5", "unit mass", False),
         ("mass 1 + 5e-6", "unit mass", True),
         ("area 2% high", "area", False),
-        ("area 0.5% high", "area", True),
+        ("area 0.5% high", "area", False),
+        ("area stored as float32", "area", True),
         ("one entry -1e-6", "nonnegativity", False),
     ],
 )
@@ -414,6 +415,10 @@ def test_the_validators_thresholds_are_where_it_says(
 
             mass = area @ to_dense(values, area.size) @ area
             handle["connectivity"][...] = (values * (1 + total) / mass).astype(np.float32)
+        elif change == "area stored as float32":
+            area = handle["area"][()]
+            del handle["area"]
+            handle.create_dataset("area", data=area.astype(np.float32))
         elif change.startswith("area"):
             handle["area"][...] = handle["area"][()] * (1.02 if "2%" in change else 1.005)
         else:
@@ -485,7 +490,10 @@ def test_a_mask_of_0s_and_1s_reads_alike_whatever_its_numbers(example_files, tmp
 
 
 def test_an_fc_file_with_no_cortex_fails_the_mask_check(example_files, tmp_path):
-    """Nothing kept, nothing leaked: zeros under a mask of no cortex passed all eleven checks."""
+    """Nothing kept, nothing leaked: zeros under a mask of no cortex passed all eleven checks.
+
+    Zeros are no correlations either, which the correlation check says.
+    """
 
     def no_cortex(handle):
         handle["mask"][...] = False
@@ -496,7 +504,8 @@ def test_an_fc_file_with_no_cortex_fails_the_mask_check(example_files, tmp_path)
         for check in validate_file(_changed(example_files, "fc", tmp_path, no_cortex))
         if not check.passed
     }
-    assert failed == {"mask": "no vertex is cortex: the mask keeps nothing"}
+    assert failed["mask"] == "no vertex is cortex: the mask keeps nothing"
+    assert set(failed) == {"mask", "correlation"} and "none reaches 0.001" in failed["correlation"]
 
 
 def _fc_with(tmp_path, change):
@@ -546,7 +555,7 @@ def test_the_correlation_check_is_twelfth_and_skipped_for_sc(example_files):
         "metadata",
         "grid",
         "shapes",
-        "symmetry",
+        "storage",
         "finite",
         "nonnegativity",
         "correlation",
@@ -619,3 +628,196 @@ def test_triangles_stored_in_another_face_order_fail_the_endpoints_check(example
     assert good.passed and "every endpoint rebuilds within one edge (4.74 degrees)" in good.detail
     fc = {c.name: c for c in validate_file(example_files["fc"])}["endpoints"]
     assert str(fc) == "[PASS] endpoints: skipped: no endpoint positions"
+
+
+# --- the review of 23 November 2026 (A1-01 to A1-06) --------------------------------------
+
+
+def _failed(path):
+    return {check.name: check.detail for check in validate_file(path) if not check.passed}
+
+
+def _rewrite_example(example_files, modality, tmp_path, name, **parts):
+    """The example file of ``modality`` with some of its parts replaced, written as ``name``."""
+    import sbci
+
+    cc = sbci.load(example_files[modality])
+    given = {
+        "data": cc.data,
+        "area": cc.area,
+        "mask": cc.mask,
+        "metadata": cc.metadata,
+        "coords": cc.coords,
+        "endpoints": cc.endpoints,
+    }
+    given.update(parts)
+    return write_hdf5(tmp_path / name, compression=None, **given)
+
+
+def test_a_file_of_the_released_version_reads_after_a_freeze(example_files, tmp_path, monkeypatch):
+    """With SPEC_VERSION frozen at 0.1.0, files written as 0.1.0-draft still load and validate."""
+    import shutil
+
+    import sbci
+    from sbci import spec
+    from sbci.cohort import load_cohort
+
+    folder = tmp_path / "cohort"
+    folder.mkdir()
+    shutil.copy(example_files["sc"], folder / "sub-synth01_sc.h5")
+    assert sbci.load(folder / "sub-synth01_sc.h5").metadata["spec_version"] == "0.1.0-draft"
+    for frozen in ("0.1.0", "0.1.3"):
+        monkeypatch.setattr(spec, "SPEC_VERSION", frozen)
+        sbci.load(folder / "sub-synth01_sc.h5")
+        assert _failed(folder / "sub-synth01_sc.h5") == {}
+        cohort = load_cohort(folder, validate=True)
+        assert cohort.subjects == ["sub-synth01"]
+        assert cohort.settings["sc"]["spec_version"] == "0.1"
+
+
+@pytest.mark.parametrize("version", [0.1, "0.1.0-final", "0.1.x.y"])
+def test_a_version_of_another_form_fails_the_metadata_check(example_files, tmp_path, version):
+    """The float 0.1, "0.1.0-final" and "0.1.x.y" were read as format 0.1, and passed."""
+    import json
+
+    def edit(handle):
+        metadata = json.loads(handle["metadata"][()])
+        metadata["spec_version"] = version
+        del handle["metadata"]
+        handle["metadata"] = json.dumps(metadata)
+
+    assert set(_failed(_changed(example_files, "sc", tmp_path, edit))) == {"metadata"}
+
+
+def _rolled(handle):
+    """The barycentric weights moved one corner on: the right triangles, the wrong corners."""
+    for name in ("barycentric_in", "barycentric_out"):
+        values = handle[f"endpoints/{name}"][()]
+        del handle[f"endpoints/{name}"]
+        handle["endpoints"].create_dataset(name, data=np.roll(values, 1, axis=1))
+
+
+def test_weights_on_the_wrong_corners_fail_the_endpoints_check(example_files, tmp_path):
+    """Rolled one corner, every endpoint still rebuilt within one edge of its vertex, and passed."""
+    failed = _failed(_changed(example_files, "sc", tmp_path, _rolled))
+    assert set(failed) == {"endpoints"}
+    assert "within one edge" in failed["endpoints"]
+    assert "under the 90% the corner rule needs" in failed["endpoints"]
+    good = {c.name: c for c in validate_file(example_files["sc"])}["endpoints"]
+    assert good.passed and "heaviest or nearest corner for 100.0%" in good.detail
+
+
+def test_a_writer_that_stores_the_nearest_vertex_passes(example_files, tmp_path):
+    """The corner rule takes the nearest corner as well as the heaviest one."""
+    import sbci
+    from sbci.smoothing import _vertex_offsets
+
+    cc = sbci.load(example_files["sc"])
+    sphere = sbci.load_surface("sphere")
+    unit = sphere.vertices / np.linalg.norm(sphere.vertices, axis=1, keepdims=True)
+    faces = np.asarray(sphere.faces, dtype=np.int64)
+    ends = cc.endpoints
+    points_in, points_out, _, _ = _vertex_offsets(ends)
+    nearest = {}
+    for side, points, triangle, surf in (
+        ("vtx_in", points_in, ends.tri_in, ends.surf_in),
+        ("vtx_out", points_out, ends.tri_out, ends.surf_out),
+    ):
+        corners = faces[np.asarray(triangle, dtype=np.int64) + 5120 * np.asarray(surf, np.int64)]
+        closest = np.argmax(np.einsum("sj,skj->sk", points, unit[corners]), axis=1)
+        nearest[side] = corners[np.arange(len(corners)), closest] % 2562
+    moved = ends.copy()
+    moved.vtx_in, moved.vtx_out = nearest["vtx_in"], nearest["vtx_out"]
+    assert (moved.vtx_in != ends.vtx_in).mean() > 0.01  # about 3% are not the heaviest
+    path = _rewrite_example(example_files, "sc", tmp_path, "sub-02_sc.h5", endpoints=moved)
+    checks = {c.name: c for c in validate_file(path)}
+    assert all(c.passed for c in checks.values()), _failed(path)
+    assert "nearest 100.0%" in checks["endpoints"].detail
+
+
+def test_areas_other_than_the_grids_fail_though_their_total_is_right(example_files, tmp_path):
+    """Uniform areas of the right total, the SC renormalized to them, passed every check."""
+    import sbci
+    from sbci import spec
+    from sbci.grid import to_dense
+
+    cc = sbci.load(example_files["sc"])
+    uniform = np.full(spec.N_VERTICES, spec.AREA_TOTAL / spec.N_VERTICES)
+    mass = uniform @ to_dense(cc.data.astype(np.float64), spec.N_VERTICES) @ uniform
+    path = _rewrite_example(
+        example_files, "sc", tmp_path, "sub-02_sc.h5", data=cc.data / mass, area=uniform
+    )
+    failed = _failed(path)
+    assert set(failed) == {"area"} and "differ from the grid's own" in failed["area"]
+
+
+def test_a_mask_other_than_the_grids_medial_wall_fails(example_files, tmp_path):
+    """438 wall vertices called cortex, or empty cortex called wall: each passed every check."""
+    import sbci
+
+    cc = sbci.load(example_files["sc"])
+    wall = np.flatnonzero(~cc.mask)
+    one_wall_vertex = np.ones_like(cc.mask)
+    one_wall_vertex[wall[0]] = False
+    empty = np.flatnonzero(cc.mask & (np.abs(cc.dense()).sum(axis=1) == 0))
+    assert empty.size  # cortex the example's streamlines never reach
+    more_wall = cc.mask.copy()
+    more_wall[empty] = False
+    for mask, said in (
+        (one_wall_vertex, "438 wall vertices called cortex and 0 cortical"),
+        (more_wall, f"0 wall vertices called cortex and {empty.size} cortical vertices"),
+    ):
+        failed = _failed(_rewrite_example(example_files, "sc", tmp_path, "sub-02_sc.h5", mask=mask))
+        assert set(failed) == {"mask"} and said in failed["mask"], failed
+
+
+def test_metadata_values_outside_their_domain_fail_the_metadata_check(example_files, tmp_path):
+    import json
+
+    for change in ({"kernel": "gaussian"}, {"bandwidth": -1}, {"streamline_count": -5}):
+
+        def edit(handle, change=change):
+            metadata = json.loads(handle["metadata"][()])
+            metadata.update(change)
+            del handle["metadata"]
+            handle["metadata"] = json.dumps(metadata)
+
+        failed = _failed(_changed(example_files, "sc", tmp_path, edit))
+        assert set(failed) == {"metadata"} and next(iter(change)) in failed["metadata"]
+
+
+def test_a_name_that_says_the_other_modality_fails(example_files, tmp_path):
+    """An SC file named _fc.h5 passed; a name that says no modality still passes."""
+    import shutil
+
+    misnamed = shutil.copy(example_files["sc"], tmp_path / "sub-02_fc.h5")
+    failed = _failed(misnamed)
+    assert set(failed) == {"name"} and "says fc, but its metadata says sc" in failed["name"]
+    plain = shutil.copy(example_files["sc"], tmp_path / "example.h5")
+    assert _failed(plain) == {}
+
+
+def test_an_sc_density_labelled_fc_fails_the_correlation_check(example_files, tmp_path):
+    """Values of 1e-11 are no correlations, and passed every FC check."""
+    import sbci
+
+    sc, fc = sbci.load(example_files["sc"]), sbci.load(example_files["fc"])
+    path = write_hdf5(
+        tmp_path / "sub-02_fc.h5", sc.data, sc.area, sc.mask, fc.metadata, compression=None
+    )
+    failed = _failed(path)
+    assert set(failed) == {"correlation"} and "not correlations" in failed["correlation"]
+
+
+def test_one_nan_is_left_to_the_finite_check_by_the_mask_check(example_files, tmp_path):
+    """One NaN made the mask check fail, saying the wall carried 0 of the total."""
+
+    def one_nan(handle):
+        values = handle["connectivity"][()]
+        values[123456] = np.nan
+        handle["connectivity"][...] = values
+
+    checks = {c.name: c for c in validate_file(_changed(example_files, "sc", tmp_path, one_nan))}
+    assert not checks["finite"].passed and not checks["unit mass"].passed
+    assert checks["mask"].passed
+    assert "the 1 non-finite entries left out" in checks["mask"].detail
