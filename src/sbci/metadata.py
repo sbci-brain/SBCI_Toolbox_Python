@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import numbers
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,6 +15,43 @@ from .errors import SbciError
 
 class MetadataError(SbciError, ValueError):
     """Raised when a file's metadata is missing keys or is self-inconsistent."""
+
+
+_VERSION = re.compile(spec.VERSION_PATTERN)
+
+
+def format_of(version: Any) -> str:
+    """The format a ``spec_version`` names, ``MAJOR.MINOR`` (:mod:`sbci.spec`, the version rule).
+
+    Raises :class:`MetadataError` for anything that is not a version: a number,
+    ``"0.1"``, a tag other than ``-draft``, or more than three parts.
+
+    Examples
+    --------
+    >>> format_of("0.1.0-draft"), format_of("0.1.7"), format_of("1.0.0")
+    ('0.1', '0.1', '1.0')
+    """
+    if not isinstance(version, str):
+        raise MetadataError(
+            f"spec_version must be text, MAJOR.MINOR.PATCH, not the {type(version).__name__} "
+            f"{version!r}"
+        )
+    match = _VERSION.fullmatch(version)
+    if match is None:
+        raise MetadataError(
+            f"spec_version {version!r} is not a version: MAJOR.MINOR.PATCH, three whole "
+            "numbers, with '-draft' the only tag allowed after them"
+        )
+    return f"{match.group(1)}.{match.group(2)}"
+
+
+def _whole(value: Any) -> bool:
+    """Whether ``value`` is a whole number: an integer, or a float with nothing after the point."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, numbers.Integral):
+        return True
+    return isinstance(value, numbers.Real) and math.isfinite(value) and float(value).is_integer()
 
 
 @dataclass
@@ -134,20 +172,24 @@ class Metadata:
             )
 
         convention = self.fields["storage_convention"]
-        expected = f"{spec.TRIANGLE}-triangular-{spec.DTYPE}"
-        if convention != expected:
+        if convention != spec.STORAGE_CONVENTION:
             raise MetadataError(
-                f"storage_convention {convention!r} is not {expected!r}; a differently "
-                "stored vector would be read into the wrong matrix entries"
+                f"storage_convention {convention!r} is not {spec.STORAGE_CONVENTION!r}; a "
+                "differently stored vector would be read into the wrong matrix entries"
             )
 
-        if self.fields.get("spec_version") is None:
+        version = self.fields.get("spec_version")
+        if version is None:
             raise MetadataError("metadata carries no spec_version")
-        version = str(self.fields["spec_version"])
-        if version.split(".")[:2] != spec.SPEC_VERSION.split(".")[:2]:
+        family = format_of(version)
+        if family not in spec.READABLE_VERSIONS:
             raise MetadataError(
-                f"spec_version {version!r} is not compatible with {spec.SPEC_VERSION!r}"
+                f"spec_version {version!r} is not compatible with this build, which reads "
+                f"format {' and '.join(sorted(spec.READABLE_VERSIONS))} and writes "
+                f"{spec.SPEC_VERSION!r}"
             )
+
+        self._check_values(modality)
 
         # nu, of spec.SC_OPTIONAL_KEYS, is the Matern kernel's own: smooth() writes it
         # for kernel="matern" alone, and load_cohort tells files apart by it
@@ -160,6 +202,61 @@ class Metadata:
                 )
             if isinstance(nu, bool) or not isinstance(nu, numbers.Real) or not 0 < nu < math.inf:
                 raise MetadataError(f"nu must be a positive number, got {nu!r}")
+
+    def _check_values(self, modality: str) -> None:
+        """Refuse values the format has no place for: the domains of the keys it fixes.
+
+        The mask and area conventions are the format's only ones, the
+        normalization is the modality's own, a key of the other modality is
+        absent or empty, and an SC file's kernel, bandwidth and streamline count
+        are a kernel the package knows, a positive number and a whole number.
+        """
+        held = (
+            "a density of area-weighted mass one"
+            if modality == "sc"
+            else "correlations as they are"
+        )
+        for key, expected, meaning in (
+            ("mask", spec.MASK_CONVENTION, "/mask false on the medial wall"),
+            ("area_weights", spec.AREA_CONVENTION, "/area in fsaverage vertices a grid vertex"),
+            ("normalization", spec.NORMALIZATION[modality], held),
+        ):
+            value = self.fields[key]
+            if not isinstance(value, str) or value != expected:
+                raise MetadataError(
+                    f"{key} must be {expected!r} ({meaning}) in an {modality.upper()} file, "
+                    f"got {value!r}"
+                )
+
+        others = (
+            spec.FC_ONLY_KEYS if modality == "sc" else (*spec.SC_ONLY_KEYS, *spec.SC_OPTIONAL_KEYS)
+        )
+        carried = [key for key in others if self.fields.get(key) is not None]
+        if carried:
+            raise MetadataError(
+                f"an {modality.upper()} file carries {', '.join(carried)}, which belong to the "
+                "other modality: the metadata contradicts itself"
+            )
+        if modality != "sc":
+            return
+
+        kernel = self.fields["kernel"]
+        if not isinstance(kernel, str) or kernel not in spec.KERNELS:
+            raise MetadataError(
+                f"kernel must be one of {', '.join(spec.KERNELS)}, as written, got {kernel!r}"
+            )
+        bandwidth = self.fields["bandwidth"]
+        if (
+            isinstance(bandwidth, bool)
+            or not isinstance(bandwidth, numbers.Real)
+            or not 0 < bandwidth < math.inf
+        ):
+            raise MetadataError(f"bandwidth must be a positive number, got {bandwidth!r}")
+        count = self.fields["streamline_count"]
+        if not _whole(count) or count < 0:
+            raise MetadataError(
+                f"streamline_count must be a whole number, 0 or more, got {count!r}"
+            )
 
 
 def _plain(value: Any) -> Any:
@@ -187,9 +284,9 @@ def template(modality: str, **overrides: Any) -> Metadata:
         "spec_version": spec.SPEC_VERSION,
         "grid": spec.GRID,
         "hemisphere_order": list(spec.HEMISPHERE_ORDER),
-        "mask": "medial-wall",
-        "area_weights": "vertex-area",
-        "storage_convention": f"{spec.TRIANGLE}-triangular-{spec.DTYPE}",
+        "mask": spec.MASK_CONVENTION,
+        "area_weights": spec.AREA_CONVENTION,
+        "storage_convention": spec.STORAGE_CONVENTION,
         "included_connections": modality,
         "normalization": None,
         "registration_reference": None,

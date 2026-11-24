@@ -21,7 +21,7 @@ def test_complete_metadata_validates(sc_metadata):
 def test_fc_does_not_require_streamline_keys():
     metadata = template(
         "fc",
-        normalization="unit-mass",
+        normalization="none",
         registration_reference="fsaverage",
         pipeline_version="0.0.1.dev0",
         container_version="sbci.sif@sha256:0",
@@ -128,3 +128,134 @@ def test_nu_belongs_to_a_matern_file_and_is_a_positive_number(sc_metadata):
     ):
         with pytest.raises(MetadataError, match=message):
             template("sc", **{**sc_metadata.fields, **changes}).validate()
+
+
+# --- the review of 23 November 2026 (A1-01, A1-04, A1-15) -------------------------------
+
+
+def _fc(**changes):
+    fields = dict(
+        normalization="none",
+        registration_reference="fsaverage",
+        pipeline_version="p",
+        container_version="c",
+        fc_nuisance_model="none",
+    )
+    return template("fc", **{**fields, **changes})
+
+
+@pytest.mark.parametrize(
+    ("version", "family"),
+    [
+        ("0.1.0-draft", "0.1"),
+        ("0.1.0", "0.1"),
+        ("0.1.7", "0.1"),
+        ("1.0.0", "1.0"),
+        ("10.2.3", "10.2"),
+    ],
+)
+def test_a_version_names_its_format(version, family):
+    from sbci.metadata import format_of
+
+    assert format_of(version) == family
+
+
+@pytest.mark.parametrize(
+    "version",
+    [0.1, 1, "0.1", "0.1-draft", "0.1.0-final", "0.1.x.y", "0.1.0.0", "00.1.0", "0.1.0 ", "v0.1.0"],
+)
+def test_what_is_not_a_version_is_refused(version):
+    """The float 0.1, "0.1.0-final" and "0.1.x.y" read as format 0.1, and loaded."""
+    with pytest.raises(MetadataError, match="spec_version"):
+        _fc(spec_version=version).validate()
+
+
+def test_the_released_files_version_reads_under_a_freeze(monkeypatch):
+    """A freeze to 0.1.0 keeps 0.1.0-draft files: the formats read are listed, not derived."""
+    from sbci import spec
+
+    _fc(spec_version="0.1.0-draft").validate()
+    for frozen in ("0.1.0", "0.1.1"):
+        monkeypatch.setattr(spec, "SPEC_VERSION", frozen)
+        _fc(spec_version="0.1.0-draft").validate()
+        assert template("fc")["spec_version"] == frozen
+    monkeypatch.setattr(spec, "SPEC_VERSION", "1.0.0")
+    _fc(spec_version="0.1.0-draft").validate()  # still listed among the formats read
+    with pytest.raises(MetadataError, match="not compatible"):
+        _fc(spec_version="1.0.0").validate()  # not until 1.0 is added to them
+
+
+def test_the_format_written_is_one_read():
+    from sbci import spec
+    from sbci.metadata import format_of
+
+    assert format_of(spec.SPEC_VERSION) in spec.READABLE_VERSIONS
+
+
+def test_the_kernel_vocabulary_is_the_smoothers():
+    from sbci import smoothing, spec
+
+    assert spec.KERNELS == smoothing.KERNELS
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"kernel": "gaussian"}, "kernel must be one of"),
+        ({"kernel": "SHK"}, "kernel must be one of"),
+        ({"bandwidth": -1}, "bandwidth must be a positive number"),
+        ({"bandwidth": 0}, "bandwidth must be a positive number"),
+        ({"bandwidth": "wide"}, "bandwidth must be a positive number"),
+        ({"bandwidth": True}, "bandwidth must be a positive number"),
+        ({"streamline_count": -5}, "streamline_count must be a whole number"),
+        ({"streamline_count": 2.5}, "streamline_count must be a whole number"),
+        ({"streamline_count": "many"}, "streamline_count must be a whole number"),
+        ({"normalization": "none"}, "normalization must be 'unit-mass'"),
+        ({"fc_nuisance_model": "24P"}, "carries fc_nuisance_model"),
+        ({"mask": "none"}, "mask must be 'medial-wall'"),
+        ({"area_weights": "sphere-area"}, "area_weights must be 'vertex-area'"),
+    ],
+)
+def test_values_outside_their_domain_are_refused(sc_metadata, changes, message):
+    """Each passed: a kernel there is none of, a negative bandwidth, the other modality's keys."""
+    with pytest.raises(MetadataError, match=message):
+        template("sc", **{**sc_metadata.fields, **changes}).validate()
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"kernel": "shk", "bandwidth": 0.005}, "carries kernel, bandwidth"),
+        ({"streamline_count": 10}, "carries streamline_count"),
+        ({"normalization": "unit-mass"}, "normalization must be 'none'"),
+    ],
+)
+def test_an_fc_file_carries_nothing_of_sc(changes, message):
+    with pytest.raises(MetadataError, match=message):
+        _fc(**changes).validate()
+
+
+def test_what_the_writers_write_is_in_the_domains(sc_metadata):
+    """The values the build tools, the example and smooth() write all pass, a whole float too."""
+    for changes in (
+        {"kernel": "rdk"},
+        {"kernel": "matern", "nu": 3.0},
+        {"streamline_count": 0},
+        {"streamline_count": 823_732.0},
+        {"bandwidth": np.float32(0.005)},
+        {"streamline_weighting": "unrecorded", "entry_point": "precomputed"},
+        {"fc_nuisance_model": None},
+    ):
+        template("sc", **{**sc_metadata.fields, **changes}).validate()
+    _fc(kernel=None, bandwidth=None, fc_frames=4800, fc_runs=["REST1_LR"]).validate()
+
+
+def test_the_specs_constants_are_the_ones_read():
+    """TRIANGLE and DTYPE reach the reader through one constant; BIDS_PATTERN, unread, is gone."""
+    from sbci import spec
+
+    assert spec.STORAGE_CONVENTION == f"{spec.TRIANGLE}-triangular-{spec.DTYPE}"
+    assert template("sc")["storage_convention"] == spec.STORAGE_CONVENTION
+    assert template("fc")["mask"] == spec.MASK_CONVENTION
+    assert template("fc")["area_weights"] == spec.AREA_CONVENTION
+    assert not hasattr(spec, "BIDS_PATTERN")
