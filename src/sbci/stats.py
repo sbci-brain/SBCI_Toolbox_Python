@@ -580,7 +580,7 @@ class LocalTest:
 
     @property
     def groups(self) -> int:
-        """:attr:`n_groups`, under the name it had first: how many groups, not which."""
+        """:attr:`n_groups` by another name: how many groups, not which."""
         return self.n_groups
 
     def significant(self, alpha: float = 0.05) -> np.ndarray:
@@ -1383,13 +1383,13 @@ class _Families:
             kept = values > _NULL_EIGENVALUE
             root = np.zeros_like(values)
             root[kept] = 1.0 / np.sqrt(values[kept])
-            adjust = np.einsum("gij,gj,gkj->gik", vectors, root, vectors)
+            adjust = (vectors * root[:, None, :]) @ vectors.transpose(0, 2, 1)
             weights = u.transpose(0, 2, 1) @ adjust  # U_g' A_g, (families, rank, size)
             self.blocks.append((members, weights))
             shrink.append(weights @ u)
             square.append(weights @ weights.transpose(0, 2, 1))
             # v' U_g for each direction v the family's residuals cannot carry
-            blind.append(np.einsum("gij,gik->gjk", vectors, u)[~kept])
+            blind.append((vectors.transpose(0, 2, 1) @ u)[~kept])
         self.shrink = np.concatenate(shrink)  # T_g
         self.square = np.concatenate(square)  # Q_g
         self.blind = np.concatenate(blind).reshape(-1, rank)
@@ -1412,13 +1412,13 @@ class _Families:
         return meat
 
     def unseen(self, rows) -> np.ndarray:
-        """Which rows ``r`` of ``r @ U'``-weights one family's subjects alone estimate, in part.
+        """Which rows ``r = c A`` lean, at least in part, on one family's subjects alone.
 
-        Such a row's estimate leans on a direction the design fits inside one
-        family, ``v``, by ``v' U_g r'``: the residuals carry nothing of it, so no
-        cluster-robust error sees that part of the variance. This is exactly when
-        ``c @ beta``, for ``r = c A``, cannot be estimated from the other families'
-        subjects.
+        ``c @ beta`` weighs the subjects by ``U r'``, and a direction ``v`` the
+        design fits inside one family takes ``v' U_g r'`` of it: the residuals
+        carry nothing along ``v``, so no cluster-robust error sees that part of
+        the variance. This happens exactly when ``c @ beta`` cannot be
+        estimated from the other families' subjects.
         """
         rows = np.atleast_2d(rows)
         if not self.blind.size:
