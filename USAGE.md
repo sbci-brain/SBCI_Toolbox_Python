@@ -1196,12 +1196,17 @@ to know:
   recurrence, to the digits of the MATLAB reference run, until the defaults
   were shown to undo known warps better (PORTING.md items 7 and 22).
 - **Rigid initialization is off by default**, as in the reference's own
-  example; `init_rotation=True` runs the multi-shell rotation search first,
-  and the rotation it finds is held exactly while the registration deforms
-  after it. The reference's caps turn about axes perpendicular to z only, so
-  its search could not undo a turn about z (an 8-degree turn stayed 9.4 and 8.0
-  degrees off on ico3, PORTING.md item 18); each shell's best are now turned
-  about z too. The exported warp keeps it as
+  example; `init_rotation=True` runs a rotation search first, over every
+  rotation: the 60 icosahedral rotations each composed with turns out to 44
+  degrees, so that no rotation is more than 12.5 degrees from one scored, the
+  best then polished to 1/64 degree. The two hemispheres' turns are chosen
+  together, the streamlines between them included, so a hemisphere that looks
+  alike after a half-turn takes the turn they agree with, and a turn is kept
+  only when it lowers the cost. The rotation found is held exactly while the
+  registration deforms after it. The reference's search reached 20 degrees
+  from the icosahedral rotations and kept what it found, so a hemisphere
+  turned 40 degrees came back 142 degrees off (PORTING.md items 18 and 42).
+  The exported warp keeps it as
   `lh_rigid` and `rh_rigid`; its
   vertices are the whole map.
 - **The stopping threshold is absolute, with a floor.** The public code's
@@ -1331,7 +1336,7 @@ grid ran in threads on the CPU, item 36):
 | ConSEAL: a subject's density and its derivatives | 1.7 s | 0.05 s |
 | ConSEAL: relocating 1.6 million endpoints | 3.4 s | 0.72 s |
 | ConSEAL: ten iterations of a registration | 65.9 s | 13.5 s |
-| ConSEAL: three iterations after the rotation search (`init_rotation`) | 214.4 s | 21.2 s |
+| ConSEAL: three iterations after the rotation search before item 42 (`init_rotation`) | 214.4 s | 21.2 s |
 
 Before item 36 the CPU took 17.2 s to relocate the endpoints and 242.5 s for
 the ten iterations, so the V100's lead there fell from seventeen times to five.

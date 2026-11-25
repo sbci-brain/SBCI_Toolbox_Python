@@ -1562,10 +1562,11 @@ aligned = result.aligned_endpoints(0)               # an Endpoints object, ready
 
 `conseal_compare.py` reproduces the reference to the digits above with the
 reference's errors put back (entry 14 above; items 21 and 22);
-`init_rotation=True` adds the multi-shell rigid search (its schedule is
-regenerated from `create_search_schedule.m`, 80/20/20/20/16 rotations, and the
-60 icosahedral rotations are fitted to the grid rather than assumed, and the
-densities are transported by interpolation, so it also runs on the bundled
+`init_rotation=True` adds a rotation search over every rotation (item 42; until
+then the multi-shell search, its schedule regenerated from
+`create_search_schedule.m`, 80/20/20/20/16 rotations), with the 60 icosahedral
+rotations fitted to the grid rather than assumed and the densities transported
+by interpolation, so it also runs on the bundled
 FreeSurfer sphere, which is an icosphere to 1.7e-4 -- the precision of its
 stored coordinates).
 On ico4 an iteration costs a few seconds per 100,000 streamlines: the kernel
@@ -2144,7 +2145,7 @@ records the sizes on the released subjects and the bundled data.
 | 2 | the FC exchange file shrinks correlations beside the medial wall | **confirmed**: the operator averaged the wall's empty rows in as zeros | FC goes through the operator restricted to cortex, its rows renormalized; a density keeps the whole one | 407 fsLR vertices straddle the wall; their correlations were scaled by 0.125 to 0.889 -- halved at 69, cut by more than half at 157 |
 | 3 | the documented atlas-level coupling takes SC's mass, against FC's mean correlation | **confirmed**: USAGE's recipe used `to_atlas`'s default for SC, which grows with the regions' size | the recipe takes SC's mean density, `how="mean"`; the quoted figures re-measured | on the eleven, 0.271 to 0.370 per subject (the tutorial subject 0.312) becomes 0.329 to 0.421 (0.364). The review's 0.566 and 0.668 were not reproduced |
 | 4 | ConSEAL's `area_weighted=True` does nothing | **confirmed**: raw Voronoi areas scaled the cost by their mean squared, 2.4e-5 on ico4 (1/41,666), below the stopping threshold, so a registration stopped before its first step | the areas weigh cost and gradient in units of their mean | the weighted cost is now within 25% of the plain one, and a weighted registration takes its steps |
-| 5 | the rigid search cannot undo a turn about z | **confirmed**: every rotation in the reference's caps takes z to a nearby direction, about an axis perpendicular to z | each shell's best candidates are turned about z as well, over the same span and spacing (`spin_shells`); `strict_upstream=True` keeps the reference's search (until item 22; `reference_conseal.py` since) | on ico3, 8 degrees about z was left 9.4 and 8.0 degrees off (left, right), about a tilted axis 3.3 and 3.0; now 0.37 and 0.11, and 0.33 and 0.20; about x 0.07 either way. The search takes half again as long (14 s against 9 there) |
+| 5 | the rigid search cannot undo a turn about z | **confirmed**: every rotation in the reference's caps takes z to a nearby direction, about an axis perpendicular to z | each shell's best candidates are turned about z as well, over the same span and spacing (`spin_shells`); `strict_upstream=True` keeps the reference's search (until item 22; `reference_conseal.py` since) | on ico3, 8 degrees about z was left 9.4 and 8.0 degrees off (left, right), about a tilted axis 3.3 and 3.0; now 0.37 and 0.11, and 0.33 and 0.20; about x 0.07 either way. The search takes half again as long (14 s against 9 there); superseded by item 42, where `spin_shells` and the reference's schedule are gone |
 | 6 | `fsaverage_sphere_ico4.npz` maps 27 grid vertices to the wrong fsaverage vertex | **confirmed**: the file was built by matching the inflated surfaces, nearest to nearest; the pipeline's `mapping_avg_ico4.npz` lists grid vertex `i` as fsaverage vertex `i` | rebuilt from that identity (`tools/build_template_spheres.py`) | 27 vertices (14 left, 13 right) 0.49 to 0.50 degrees off on the standard sphere, which `migrate_warp` carried into every migrated warp there; the other 5097 unchanged |
 | 7 | an endpoint index past its hemisphere switches hemisphere through `save()` and `load()` | **confirmed**: left vertex 2600 is stored as whole-grid 2600 and read back as right vertex 38 | `Endpoints` refuses vertex and triangle indices outside the hemisphere, with the existing hint about one-based indices | -- |
 | a | following `align()`'s advice for a supplied grid on the axis misplaces its warps in `migrate_warp` | **confirmed**: the advised `rotate_off_poles` turned the grid, and nothing recorded the turn | `align()` turns such a grid clear of the axis itself and records the turn in every warp; `grid_rotations=` records a turn made beforehand | the bundled sphere's own turn is 17.2 degrees per hemisphere |
@@ -3987,7 +3988,9 @@ search now takes 37 s on the V100 against the CPU's 530 s (`gpu_review_probe.py 
 job 4722437). The three iterations take 21.1 s on the V100, the search 16.8 s of it, against
 268.5 s on the node's eight cores; 45.3 s on a GTX 1080, the search 32.2 s (job 4722468);
 and 17.7 s on an L40S, the search 13.4 s (job 4806991). On the CPU the search computes as
-before, bit for bit (*Verified*).
+before, bit for bit (*Verified*). Item 42 replaced this search with one over every
+rotation; its GPU timings and its bit-for-bit agreement with the CPU have not been measured
+again.
 
 ### The check of a usable GPU
 
@@ -5614,6 +5617,42 @@ it is applied here on its own; this item records them as they land.
   `convert` refuses every real SC); one pipeline run with the package in its image (rc 0,
   both files valid, the page written); `build_qc_reference.py` on the 946, about two hours.
 
+### ConSEAL's rotation search (A4-01, with A4-05 and A4-10), 25 November 2026
+
+- **The problem.** `init_rotation=True` searched caps of 20 degrees and less about the 60
+  icosahedral rotations, which a rotation lies up to 43.7 degrees from, and kept what it
+  found: on ico4 a hemisphere turned 40 degrees came back 142.056 degrees off, though the
+  search's own cost was 98 times lower at the truth (A4-01). Scoring each hemisphere alone,
+  it could not tell one bundle from its half-turn: turns of 100 and 160 degrees came back
+  180 off and were kept (A4-05). With `area_weighted=True` it scored plain sums, and the
+  weighted check then refused its turn. Its chunk held about twice the 1 GB its comment gave
+  (A4-10). The search is off by default and was off in every published run.
+- **The fix.** The new `_rigid` scans the 60 icosahedral rotations composed with 113 turns
+  out to 44 degrees (`scan_rotations`), which leave no rotation more than 12.5 degrees from
+  one scanned, scored on a coarser icosphere's vertex pairs; polishes the best 8, then the
+  best 4, by turns about the axes; scores each hemisphere's four finalists, and the
+  hemisphere unturned, in pairs over the whole density, the block across the hemispheres
+  included; polishes the pair chosen on every vertex pair to 1/64 degree; and keeps it only
+  when the endpoints it carries cost less than at the start. Its costs weigh vertex pairs as
+  `cost()` does. `rotation_shells` and `spin_shells` go with the old search.
+- **Checked.** The review's ico4 case, from 0.356 and 142.056 degrees off to 0.068 and
+  0.057; 24 random pairs on ico3, from 32 of 48 hemispheres within 1 degree (worst 15.5) to
+  48 of 48 (worst 0.40); a single bundle turned 100 and 160 degrees, from 179.996 and
+  179.988 off to 0.065 and 0.079; the area-weighted case, from 12 degrees off to 0.55 and
+  0.53 of the weighted optimum. A second check, written apart from the fix: over 300,000
+  random rotations none lies more than 11.90 degrees from one scanned; on the ico4 grid,
+  with a synthetic subject of 20,000 streamlines, ten random pairs and the turn farthest
+  from every icosahedral rotation (44.3 degrees) all come back within 0.14 degree and are
+  kept, an unturned subject is left alone, and the search's own objective is never higher
+  at the turn it keeps than at the truth. What remains, about 0.1 degree, is the
+  interpolation that objective rotates the density by. The ico4 search took 414 s and
+  2.44 GB, and takes 78 s and 1.04 GB on the same loaded Mac. `tests/test_conseal.py` gains
+  a turn far from the icosahedral rotations, the scan's coverage, the half-turn and the
+  area weights.
+- **Still open.** The review's check 10, 24 random turns of the tutorial subject (real
+  data), and the new search on a GPU: its CuPy path mirrors the old one's, and
+  `tests/test_gpu.py` checks it bit for bit against the CPU, but neither has run.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5655,7 +5694,7 @@ examples are notebooks, every number they quote reproduced (item 40); and five r
 read all of it once more, an HCP id came out of this file, the binary's residual is the
 binary's, and the notebooks' choices flow through (item 41); and a review of 23 November
 2026 left a list of fixes, applied one at a time as they are decided, the pipeline's two
-commands first (item 42). What is left: a version of the
+commands first, then ConSEAL's rotation search (item 42). What is left: a version of the
 dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
 *The history*); the components' sex result, which sits at the edge of the threshold (item

@@ -268,7 +268,8 @@ lie near, ten times the farthest of ten such twins of that quantity
 (`gpu_probe.py spread`, job 4685821) -- since rounding decides which face
 carries a point on an edge, and the descent goes its own way from there. Run
 twice, the GPU must give the same bits, and the rotation search of
-`init_rotation` must pick the CPU's rotations, bit for bit. Expect `39 passed`
+`init_rotation` must pick the CPU's rotations, bit for bit (the search of
+PORTING.md item 42 has not yet been run on a GPU). Expect `39 passed`
 (a V100, a GTX 1080 and an L40S, jobs 4722437, 4722468 and 4806991); without a
 GPU, `5 passed,
 34 skipped`, as in CI. Without the CUDA toolkit loaded, CuPy sees the GPU but cannot compile its
