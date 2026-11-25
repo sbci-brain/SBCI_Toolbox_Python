@@ -86,7 +86,9 @@ LIMITS_ENVIRONMENT = "SBCI_QC_LIMITS"
 LIMITS_RESOURCE = "qc_limits.json"
 """The package's own limits, in ``sbci/data``, once limits from the released subjects are built."""
 
-_PLOTTING = "pip install 'sbci[plotting]'"
+_PLOTTING = (
+    'pip install "sbci[plotting] @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"'
+)
 
 
 class QcUsageError(SbciError, ValueError):

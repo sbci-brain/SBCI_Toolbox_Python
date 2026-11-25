@@ -122,8 +122,10 @@ acknowledgment a publication must carry and the dataset's citation.
 `manifest.csv` beside them gives each subject's sex and HCP age band, never an
 exact age. [docs/RESULTS.md](docs/RESULTS.md) analyses all 946;
 `tools/build_hcp_cohort.py` and `tools/build_hcp_fc.py` build the files from
-the HCP's own data, and `tools/import_legacy.py` converts existing pipeline
-output (USAGE.md, *Getting the data* and *Using legacy pipeline output*).
+the HCP's own data; `sbci convert` converts a pipeline run's output and
+`sbci qc` writes a page to check it, and `tools/import_legacy.py` converts
+older pipeline output (USAGE.md, *Getting the data*, *From a pipeline run* and
+*Using legacy pipeline output*).
 
 ## Documentation
 

@@ -73,8 +73,8 @@ On Longleaf the lab's copy of the download is already there:
 /work/users/x/y/xya/hcp-ya/data/sub-100307_sc.h5     # and the other ten, with manifest.csv
 ```
 
-Every file passes every validator check. To convert other pipeline output,
-use `tools/import_legacy.py`.
+Every file passes every validator check. To convert a pipeline run's output,
+use `sbci convert` (*From a pipeline run*); older output, `tools/import_legacy.py`.
 
 > Paths under `/work/users/x/y/xya/`, `/overflow/zzhanglab/` and `/hickory/proj/STOR/`
 > are the lab's copies on Longleaf of what is not public, to be substituted;
@@ -1712,6 +1712,50 @@ strengthens every measure:
 
 The released files follow the pipeline and are not band-passed. `--no-gsr`
 keeps the global signal.
+
+## From a pipeline run
+
+The SBCI processing pipeline calls two commands when the package is installed
+in its image, and they can be run by hand on any run's output:
+
+```bash
+# needs: an SBCI pipeline run's output
+sbci convert PIPELINE_OUTPUT/sbci_output/files/work/sub-01/dwi_pipeline/sbci_connectome \
+    --subject sub-01 --out PIPELINE_OUTPUT/derivatives \
+    --pipeline-version VERSION --container-version IMAGE@sha256:DIGEST \
+    --config PROFILE                             # the run's profile.conf; writes sub-01_sc.h5 and sub-01_fc.h5
+sbci qc --sc PIPELINE_OUTPUT/derivatives/sub-01_sc.h5 --fc PIPELINE_OUTPUT/derivatives/sub-01_fc.h5 \
+    --run-dir PIPELINE_OUTPUT --out PIPELINE_OUTPUT/qc   # writes qc/index.html
+```
+
+`sbci convert` reads the folder's `smoothed_sc_avg_<bandwidth>_ico4.mat` and
+`fc_avg_ico4.mat`. The lower triangle has to be empty and every value finite;
+the diagonal is dropped and the medial wall zeroed, each share of the
+area-weighted mass reported, and an SC with more than 1e-6 of its mass on the
+diagonal is refused, since `c3_main` writes none. SC is scaled to unit mass
+with the bundled vertex areas, compared with the run's `mapping_avg_ico4.npz`;
+FC stays correlations. The SC file carries the streamline endpoints it was
+smoothed from (`snapped_fibers.npz` on the registered spheres; without them
+the unsnapped `mesh_intersections_ico4.mat`, said so in its metadata), and the
+FC file its frames, runs and the profile's `FMRI_` settings. The profile is
+read as text, never run: its `BANDWIDTH` and `RESOLUTION` have to agree with
+the file names. Each file is checked by `sbci validate` before it takes its
+name. A JSON report goes to stdout; the exit status is 0 when everything
+found was written and passed, 1 for an unusable input or a failed check, 2
+for a usage error. `--session` names a session's files,
+`sub-01_ses-<label>_sc.h5`.
+
+`sbci qc` writes a page with every validator check, the checks that tie the
+two files together, a few measures (the streamline count, the share of SC
+mass between the hemispheres, the FC's mean and spread, the median SC-FC
+coupling), figures when the plotting extra is installed, and the run's
+records (`config/versions.json`, `sbci_local.json`, the manifests,
+`logs/convert.json` and every non-empty `logs/*.err`). Its verdict is pass,
+flag or fail; exit status 0 for pass, 1 otherwise. A measure is flagged only
+against reference limits built from a whole reference population by
+`tools/build_qc_reference.py` and installed with `--limits` or
+`$SBCI_QC_LIMITS`; none ship yet, so the page says "no reference limits
+installed" and the verdict rests on the checks.
 
 ## Using legacy pipeline output
 

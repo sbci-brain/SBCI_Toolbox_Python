@@ -5582,6 +5582,38 @@ file, a page that reports family-based results. What they found, and what change
   6186207, 6186208 and 6186209); no subject id in the cohort notebook, no home path in any output.
 - **CI** passed on the pushed commit, the first with `--import-mode=importlib`.
 
+## 42. The review of 23 November 2026, its fixes applied one at a time -- FIRST, THE PIPELINE'S TWO COMMANDS
+
+A review of the whole repository at 9676a9b, on 23 November 2026, by seven code reviewers and
+one documentation reviewer, found no wrong released file and no wrong number in
+docs/RESULTS.md, and a list of fixes. Each fix was written and checked first on a scratch
+branch: a check script reproduces the review's scenario, fails on 9676a9b and passes with the
+fix, and a regression test goes into `tests/` wherever the fix is code. The scripts and their
+logs are kept with the review's record, not in the repository. The user decides each fix and
+it is applied here on its own; this item records them as they land.
+
+### `sbci convert` and `sbci qc` (A6-01), 25 November 2026
+
+- **The problem.** `run_subject.sbatch` calls `sbci convert` and `sbci qc` whenever `sbci`
+  is importable; neither existed, so argparse exited with code 2, a successful run ended
+  with code 2, and it pointed to a page never written.
+- **The fix.** `src/sbci/convert.py` reads a subject's `sbci_connectome` folder and writes
+  `sub-<id>_sc.h5` and `_fc.h5`, validating each before it takes its name; `src/sbci/qc.py`
+  writes a page and a verdict (USAGE.md, *From a pipeline run*). `tools/build_qc_reference.py`
+  builds the limits `qc` flags against, refusing any population of another size than
+  `--expect`; none ship yet, since limits come from a whole reference population, never a
+  pilot, so the verdict rests on the checks.
+- **Checked.** The tests run lines 188 to 197 of `run_subject.sbatch`, pinned by SHA-256,
+  through bash, on made-up pipeline output: before the fix, exit 2 and no page; after it,
+  exit 0, both files valid and the page written. `tests/test_convert.py` and
+  `tests/test_qc.py` add 56 tests and 6 doctests. A patch for the pipeline itself (its
+  session layout, its file names, `set -u` under bash before 4.4) is kept with the review's
+  record for the pipeline's maintainers, applied nowhere.
+- **Still open, needing real data.** That the current pipeline's `c3_main` writes a zero
+  diagonal (checked only on the legacy example, SPEC_QUESTIONS.md item 2; otherwise
+  `convert` refuses every real SC); one pipeline run with the package in its image (rc 0,
+  both files valid, the page written); `build_qc_reference.py` on the 946, about two hours.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5621,7 +5653,9 @@ kernel's full-scale comparison made on a released young adult instead, which fou
 `c3_main` never writes the grid's south pole (item 39); and the paper's three worked
 examples are notebooks, every number they quote reproduced (item 40); and five reviewers
 read all of it once more, an HCP id came out of this file, the binary's residual is the
-binary's, and the notebooks' choices flow through (item 41). What is left: a version of the
+binary's, and the notebooks' choices flow through (item 41); and a review of 23 November
+2026 left a list of fixes, applied one at a time as they are decided, the pipeline's two
+commands first (item 42). What is left: a version of the
 dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
 *The history*); the components' sex result, which sits at the edge of the threshold (item
