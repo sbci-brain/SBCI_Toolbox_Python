@@ -250,7 +250,7 @@ path: `module load connectome/1.5.0` puts an old `libstdc++` ahead of NumPy's,
 and Python then fails to import it (the probe's docstring has the commands).
 
 **On a GPU, the alignments must give what the CPU gives.** With CuPy
-(`pip install 'sbci[gpu]'`) on a node with a CUDA GPU:
+(`pip install "sbci[gpu] @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"`) on a node with a CUDA GPU:
 
 ```bash
 python -m pytest tests/test_gpu.py

@@ -47,6 +47,7 @@ from typing import Any
 import numpy as np
 
 from . import __version__, spec
+from ._extras import install_hint
 from .errors import SbciError
 
 MEASURES_VERSION = 1
@@ -86,9 +87,7 @@ LIMITS_ENVIRONMENT = "SBCI_QC_LIMITS"
 LIMITS_RESOURCE = "qc_limits.json"
 """The package's own limits, in ``sbci/data``, once limits from the released subjects are built."""
 
-_PLOTTING = (
-    'pip install "sbci[plotting] @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"'
-)
+_PLOTTING = install_hint("plotting", indent="").replace("\n", "; ")
 
 
 class QcUsageError(SbciError, ValueError):

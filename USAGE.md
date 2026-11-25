@@ -421,7 +421,8 @@ For a figure to publish, add `engine="pyvista"`: each view is rendered
 off-screen through PyVista (VTK) with smooth per-vertex normals, a
 three-point light kit and a specular highlight, then laid out in the same
 figure with the same colorbar. It needs the `render` extra
-(`pip install 'sbci[render]'`). Four fsaverage views take about ten seconds
+(`pip install "sbci[render] @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"`, or `pip install -e ".[render]"` in a
+checkout). Four fsaverage views take about ten seconds
 on a laptop and about a minute on a cluster node without a display, where
 VTK 9.4 or later renders in software by itself (an older VTK there needs its
 OSMesa build: `pip install --extra-index-url https://wheels.vtk.org

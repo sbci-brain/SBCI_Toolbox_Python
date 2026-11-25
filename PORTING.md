@@ -3433,7 +3433,8 @@ support for this repo?", both alignments, ConSEAL's relocation of the endpoints 
 
 **The change.** `align(..., device="gpu")` and `endpoints_align(..., device="gpu")`, and
 the same argument on `Encore`, `Concon` and `ConSEAL`, compute on a CUDA GPU through CuPy,
-an optional dependency (`pip install 'sbci[gpu]'`, CuPy for CUDA 12; 14.2 tested). The CPU
+an optional dependency (`pip install "sbci[gpu] @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"`, CuPy for CUDA 12;
+14.2 tested). The CPU
 stays the default. A new private module, `sbci._device`, holds what the two share: the
 check that refuses any device but `"cpu"` and `"gpu"`, and refuses `"gpu"` before any work
 when CuPy is missing (with the line that installs it) or sees no GPU; the array and sparse
@@ -5653,6 +5654,21 @@ it is applied here on its own; this item records them as they land.
   data), and the new search on a GPU: its CuPy path mirrors the old one's, and
   `tests/test_gpu.py` checks it bit for bit against the CPU, but neither has run.
 
+### Install hints that name the repository (C1-01), 25 November 2026
+
+- **The problem.** The plotting, render and gpu errors, six docstrings, USAGE.md, VERIFICATION.md
+  and item 26 told users to install an extra by the package's bare name, which looks on PyPI,
+  where no `sbci` of ours is published, so the command failed; and anyone may register the name, which would make
+  it install their code. `render.py`'s unquoted form is also refused by zsh.
+- **The fix.** One helper, `sbci._extras.install_hint`, gives every message the repository's
+  command, `pip install "sbci[EXTRA] @ git+https://github.com/sbci-brain/SBCI_Toolbox_Python.git"`,
+  and the checkout's, `pip install -e ".[EXTRA]"`; the docstrings, `sbci qc`'s page, the
+  five-minute test and the documents follow.
+- **Checked.** Eleven hints of the PyPI form in `src/` and `tests/` before, none after; with each
+  extra hidden, the plotting, render and gpu messages give the new command
+  (`tests/test_packaging.py`, which also fails on any such hint that comes back). Claiming the
+  name `sbci` on PyPI is the user's to do.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5694,7 +5710,7 @@ examples are notebooks, every number they quote reproduced (item 40); and five r
 read all of it once more, an HCP id came out of this file, the binary's residual is the
 binary's, and the notebooks' choices flow through (item 41); and a review of 23 November
 2026 left a list of fixes, applied one at a time as they are decided, the pipeline's two
-commands first, then ConSEAL's rotation search (item 42). What is left: a version of the
+commands first, then ConSEAL's rotation search and the install hints (item 42). What is left: a version of the
 dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
 *The history*); the components' sex result, which sits at the edge of the threshold (item
