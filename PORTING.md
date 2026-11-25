@@ -41,6 +41,10 @@ selects, `kappa = 1.94826245307922`. Comparing its output to this port:
 | The `smooth()` method, its density normalized and its diagonal zeroed as stored | 3.14 float32-eps relative, correlation 0.99999999999994; diagonal exactly 0, unit mass 1.000000000014 |
 | The bandwidth `smooth()` takes when given none | 1.948262356 against 1.948262453, 5.0e-08 relative |
 
+These are on the MATLAB's own basis; since item 42 the package builds the grid's basis, scales
+each kernel column to unit mass and defaults to `DEFAULT_KAPPA`, and the test puts the
+MATLAB's basis and steps back itself.
+
 *As `tests/reference/smooth_matlab_probe.py` printed them on 12 October 2026
 on an Intel and an AMD node (jobs 4627321 and 4628494, item 24; the
 correlations differ between the two in the fifteenth decimal), against the
@@ -478,7 +482,8 @@ withdrawn).
   simulation, power rising with effect size, Bonferroni never less
   conservative than the FDR correction. `groups=` makes the test hold for
   related subjects, families of twins and siblings, with cluster-robust
-  standard errors (*Related subjects* below). **This should be reviewed by
+  standard errors, CR2 on Bell and McCaffrey's degrees of freedom since item 42
+  (*Related subjects* below). **This should be reviewed by
   whoever specified the API**, because the choice of test is mine, not the
   reference's.
 
@@ -652,11 +657,16 @@ families, twins and their siblings, and members of a family resemble each
 other in their connectomes and in their traits; counting them as independent
 makes every p-value too small. `local_test(..., groups=)` takes one family
 label per subject and judges the tested terms by a Wald test with
-cluster-robust standard errors, `c * B @ M @ B` with `B = (X'X)^-1`, `M` the
-sum over families of each family's `X_g' e_g` outer product, and the usual
-small-sample factor `c = G / (G - 1) * (n - 1) / (n - p)`; the F statistic's
-denominator degrees of freedom are `G - 1`, for `G` families. Only the labels
-are needed, not who is a twin of whom.
+cluster-robust standard errors. Since item 42 these are, by default, Bell and
+McCaffrey's CR2: each family's residuals are adjusted by `A_g = (I - H_gg)^(-1/2)`
+before the sandwich is formed, and one tested row is judged on Bell and
+McCaffrey's (Satterthwaite) degrees of freedom, several by Pustejovsky and
+Tipton's HTZ test, as R's clubSandwich computes them. `vcov="CR1"` gives the
+earlier test, which the rest of this section describes: `c * B @ M @ B` with
+`B = (X'X)^-1`, `M` the sum over families of each family's `X_g' e_g` outer
+product, and the usual small-sample factor `c = G / (G - 1) * (n - 1) / (n - p)`;
+the F statistic's denominator degrees of freedom are `G - 1`, for `G` families.
+Only the labels are needed, not who is a twin of whom.
 
 How it is verified:
 
@@ -681,7 +691,9 @@ How it is verified:
   Ignoring the families triples the false-positive rate; clustering holds it
   at the nominal rate with hundreds of families, as in the HCP analysis, and
   not with dozens, as is known of cluster-robust tests. The test suite checks
-  a smaller version (150 families: 17.1% against 5.9%).
+  a smaller version (150 families: 17.1% against 5.9%). These are CR1's
+  figures; CR2's, the default since item 42, are 0.055, 0.052, 0.052 and 0.054
+  at 20, 50, 100 and 400 families, and 5.4% at 150 (item 42).
 - **Permutation is refused with groups.** Freedman-Lane shuffles subjects
   freely, and shuffling between families of different make-up, twins against
   siblings, is not exchangeable. A permutation test for family data needs the
@@ -1032,8 +1044,10 @@ hemisphere's endpoints on the registered sphere, against 0.2 to 0.4% in the
 other. The subject's own unregistered sphere puts 9 to 12% of them there as
 well, so these streamlines end on the medial wall of the subject's surface, and
 the registration is not the cause: it sits 11 to 20 degrees from the native
-sphere, as in every other subject checked. The mask drops those endpoints, and
-the subjects stay in the analysis. Their connectomes correlate with the
+sphere, as in every other subject checked. The mask zeroes the wall's rows and
+columns, so those endpoints keep only what their kernels put on cortex nearby --
+12% of a wall endpoint's mass on average with shk at 0.005 -- and the subjects
+stay in the analysis. Their connectomes correlate with the
 example mean at 0.77 to 0.83, against 0.79 to 0.84 for twelve others drawn at
 random.
 
@@ -5669,6 +5683,69 @@ it is applied here on its own; this item records them as they land.
   (`tests/test_packaging.py`, which also fails on any such hint that comes back). Claiming the
   name `sbci` on PyPI is the user's to do.
 
+### `rdk` and `matern` on the grid's own basis (M1, with A2-05 and A2-07 to A2-13, M5 and C1-28), 25 November 2026
+
+- **The problem.** The two kernels used the SBCI_Toolkit's `EV_LBO_ds_ico4_{L,R}.mat`:
+  fsaverage's white-surface eigenvectors at ico6, sampled at the ico4 vertices and given unit
+  Euclidean length, so not orthonormal on the grid. At the default bandwidth, 1.948 mm, a
+  median 0.375 of a kernel column's weight was negative and 0.544 lay beyond 20 degrees; a
+  column integrated to 26 to 157 under the areas instead of 1; a streamline end's mass varied
+  with where it landed, 0.64 to 1.51 (5-95%), and a Desikan region's mass over its share of
+  the ends ran 0.671 to 1.420. The same basis is in the MATLAB toolkit and the RDK paper.
+- **The fix.** `smooth()` builds the bundled ico4 white surface's Laplace-Beltrami basis
+  itself (`laplace_beltrami_basis`): the cotangent Laplacian on the surface's intrinsic
+  Delaunay triangulation, every edge weight nonnegative, with lumped vertex areas, all 2,562
+  modes a hemisphere, orthonormal under those areas; and scales each kernel column to unit
+  mass under the file's weights, forming `Kt A Kt'` (`kernel_matrices`). Nothing is
+  downloaded; building it takes 10 to 24 s for both hemispheres, once a session. The default
+  bandwidth is `DEFAULT_KAPPA`, 5.5 mm for rdk and 5.2 mm for matern, where each averages
+  over as many vertices as shk does at 0.005 (K_eff 306 and 299 against 302.7). The
+  toolkit's files stay readable (`find_basis`, `eigenpairs=`), for comparisons with the
+  MATLAB, and draw a warning that the kernel they make is signed. In the same change: Matern
+  in log space with a floor relative to its largest weight, and a non-finite or zero result
+  refused, naming the settings (A2-05); a warning below sigma 0.001, where the series'
+  truncation sets shk's width (A2-07); `find_basis` checks the SHA-256 of what it finds and the
+  provenance names the basis (A2-08, A2-09); the end-to-end shk test locates on the unit
+  sphere (A2-10); the documents' corrections (A2-11, A2-13); "spherical kernel", not "heat
+  kernel" (A2-12); the format's areas called counts of fsaverage vertices, with the bias they
+  give shk, 0.918 to 1.035 by Desikan region (M5, A2-06); and `fc.smooth()` saying that only
+  a structural connectome can be re-smoothed (C1-28).
+- **Checked.** On the synthetic example at the new defaults: negative share 2e-14, share
+  beyond 20 degrees 0.003, every column integrating to 1, every streamline end's mass 1, and
+  the regional ratio 0.911 to 1.064 (correlation with the region's area ratio 0.11, against
+  0.91). shk is unchanged, bit for bit, at 0.005 and 0.01. The tests comparing with the
+  MATLAB put the MATLAB's basis and its unscaled kernel back themselves; they need Tier 4's
+  data and have not been run since.
+- **Still open, needing real data.** SPEC_QUESTIONS.md item 10's rdk-shk table and anything
+  else measured with the old kernel (the review's check 4); the six seconds USAGE quotes.
+
+### Families as clusters: CR2 on Bell and McCaffrey's degrees of freedom (M2, with A5-05), 25 November 2026
+
+- **The problem.** `groups=` used the plain sandwich (CR1) on `G - 1` degrees of freedom
+  whatever was tested. With no association it rejected 0.917, 0.416, 0.273, 0.173, 0.107 and
+  0.061 at 0.05 when 1, 2, 3, 5, 10 and 40 of 400 families carried the covariate; USAGE's
+  36+ age-band contrast 0.119; and its tail was liberal (BH over 300 null features rejected
+  something in 5.3% of datasets).
+- **The fix.** `groups=` defaults to Bell and McCaffrey's CR2, tested on Bell and McCaffrey's
+  degrees of freedom for one row and Pustejovsky and Tipton's HTZ test for several, as R's
+  clubSandwich computes them; what depends only on the design and the families is computed
+  once for every column. A test on fewer than 30 degrees of freedom warns, and a tested
+  combination that only one family can estimate is refused. `vcov="CR1"` gives the earlier
+  test bit for bit, and the code behind the published numbers names it -- notebook 03,
+  `scripts/hcp_figures.py`, `tools/age_probe.py`, `tools/clustered_null.py`,
+  `tests/reference/inference_probe.py` and docs/RESULTS.md's calls -- so their saved outputs
+  stay reproducible. `LocalTest` gains `df`, `vcov` and `n_groups` (`groups` stays).
+- **Checked.** Null rejection with CR2 at 1, 2, 3, 5, 10 and 40 of 400 families: refused,
+  0.026, 0.038, 0.050, 0.054, 0.052; the 36+ contrast 0.043 and the bands jointly 0.052; BH
+  over 300 null features 4.0%. Against clubSandwich 0.6.2 on 48 single and 27 joint tests,
+  to 6.6e-14; the expected variance equals `(X'X)^-1` to 6.9e-13 under independent errors;
+  the degrees of freedom match a Monte Carlo estimate. CR1 through `vcov="CR1"` equals the
+  earlier `groups=` in 288 of 288 arrays. On a problem of the real size, 943 subjects by
+  5,124 columns in about 400 families, CR2 took 0.30 s against CR1's 0.53 s.
+- **Still open, needing the restricted table.** The review's check 1: the published
+  clustered tests re-run with CR2, which decides whether docs/RESULTS.md adopts it. On
+  simulated cohorts of their shape, sex hardly moves and weak trait results drop by 13% to 20%.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5710,7 +5787,8 @@ examples are notebooks, every number they quote reproduced (item 40); and five r
 read all of it once more, an HCP id came out of this file, the binary's residual is the
 binary's, and the notebooks' choices flow through (item 41); and a review of 23 November
 2026 left a list of fixes, applied one at a time as they are decided, the pipeline's two
-commands first, then ConSEAL's rotation search and the install hints (item 42). What is left: a version of the
+commands first, then ConSEAL's rotation search, the install hints, the Riemannian and Matern
+kernels' basis and the family-clustered test (item 42). What is left: a version of the
 dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
 *The history*); the components' sex result, which sits at the edge of the threshold (item

@@ -24,10 +24,11 @@ writes them beside the files, as ``DATA_USE.txt``. A Dataverse that asks a downl
 the dataset's guestbook (6.10 and later) is sent the answer "I agree", which that acceptance
 stands behind.
 
-:func:`fetch_basis` fetches the other data the package does not bundle: the Laplace-Beltrami
-basis of the grid that the ``rdk`` and ``matern`` kernels need, two files of 50 MB from the
-SBCI group's SBCI_Toolkit, read at one commit and verified. ``smooth()`` calls it the first
-time it needs them, and ``sbci basis`` does it ahead of time.
+:func:`fetch_basis` fetches the other data the package does not bundle: the SBCI_Toolkit's
+Laplace-Beltrami basis of the grid, two files of 50 MB read at one commit and verified, which
+the MATLAB's ``rdk`` and ``matern`` kernels use. ``smooth()`` does not need them: it builds the
+grid's own basis (:func:`sbci.smoothing.laplace_beltrami_basis`). They serve comparisons with
+the MATLAB (``smooth(..., eigenpairs=find_basis())``); ``sbci basis`` fetches them.
 """
 
 from __future__ import annotations
@@ -67,7 +68,7 @@ institution's rules for research on human subjects; you will redistribute these 
 data derived from them, only under the same terms; and you will acknowledge the HCP in any
 public presentation of results, in the words of DATA_USE.txt, written beside the files."""
 
-#: The Laplace-Beltrami basis of the ico4 grid, which the ``rdk`` and ``matern`` kernels need:
+#: The SBCI_Toolkit's Laplace-Beltrami basis of the ico4 grid, which the MATLAB's kernels use:
 #: two files of the SBCI group's SBCI_Toolkit, read at one commit, each with its size and its
 #: SHA-256 -- the files the comparisons with MATLAB were run with.
 BASIS_URL = (
@@ -750,7 +751,10 @@ def basis_dir() -> Path:
 
 
 def fetch_basis(out=None, force: bool = False, report: Callable[[str], None] = print) -> Path:
-    """Fetch the Laplace-Beltrami basis the ``rdk`` and ``matern`` kernels need; its folder.
+    """Fetch the SBCI_Toolkit's Laplace-Beltrami basis, for comparisons with the MATLAB; its folder.
+
+    ``smooth()`` does not need it: it builds the grid's own basis
+    (:func:`sbci.smoothing.laplace_beltrami_basis`).
 
     The two files, ``EV_LBO_ds_ico4_L.mat`` and ``EV_LBO_ds_ico4_R.mat``, 50 MB each, come
     from the SBCI group's SBCI_Toolkit on GitHub at commit :data:`BASIS_COMMIT`, and each is
@@ -760,7 +764,8 @@ def fetch_basis(out=None, force: bool = False, report: Callable[[str], None] = p
     Parameters
     ----------
     out
-        The folder to put them in; by default :func:`basis_dir`, where ``smooth()`` looks.
+        The folder to put them in; by default :func:`basis_dir`, where
+        :func:`sbci.smoothing.find_basis` looks.
     force
         Fetch them again even if present and correct.
     report

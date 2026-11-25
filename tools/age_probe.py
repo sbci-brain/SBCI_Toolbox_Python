@@ -180,7 +180,8 @@ def tested(data, covariate):
     The regression t test, which is the test of the correlation, or with
     ``--groups`` the same with families as clusters.
     """
-    result = sbci.local_test(data, covariate, groups=family)
+    # CR1, as the recorded probe ran; local_test's default with groups= is now CR2
+    result = sbci.local_test(data, covariate, groups=family, vcov="CR1")
     return result.pvalue, result.adjusted
 
 

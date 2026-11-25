@@ -34,6 +34,12 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    the strict upper triangle with an empty lower triangle, SC with a zero
    diagonal and FC with ones on it. Vertex areas are the count of
    high-resolution fsaverage vertices per ico4 vertex, summing to 327,684.
+   They are counts, not surface areas: 57 to 68 a vertex, correlating -0.07
+   with the grid sphere's own vertex areas and 0.00 with the white surface's.
+   With them the mass the spherical kernel gives a streamline end, averaged by
+   Desikan region, runs 0.918 to 1.035, against 0.996 to 1.003 with the
+   sphere's areas; rdk and matern scale each endpoint's kernel to unit mass
+   under them. Whether the format should carry areas instead is open.
 
 4. ~~**The ico4 <-> fsLR-32k resampling.**~~ **Built and vendored.**
 
@@ -193,18 +199,19 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
 
    FC files are refused endpoints: a field of correlations has no streamlines.
 
-   **`smooth()` still needs one thing the file does not carry.** The
-   Laplace-Beltrami basis, `EV_LBO_ds_ico4_{L,R}.mat`, is 50 MB per hemisphere.
-   It is a property of the grid rather than of the subject, so duplicating it
-   into every file would be wrong and bundling it in the wheel is too large;
-   it is passed as `eigenpairs=`, or found automatically in `$SBCI_LBO_DIR`,
-   `$SBCI_TOOLKIT/concon_estimate`, `~/.cache/sbci/lbo` or `~/.sbci/lbo`, or
-   fetched when it is in none of them (below).
-   Recomputing it from the bundled white surface was tried and rejected -- the
-   cotangent Laplacian there reproduces the reference kernel only to r = 0.94,
-   with a maximum absolute difference of 0.89 against a kernel maximum of 0.94.
+   **`smooth()` needs nothing the file does not carry** (since PORTING.md item
+   42). `rdk` and `matern` build the grid's Laplace-Beltrami basis from the
+   bundled white surface (`laplace_beltrami_basis`). The SBCI_Toolkit's
+   `EV_LBO_ds_ico4_{L,R}.mat` are not that basis: they are fsaverage's
+   white-surface eigenvectors at ico6, sampled at the ico4 vertices and given
+   unit Euclidean length, and the kernel they make is signed and non-local.
+   The r = 0.94 between the two, which once ruled out recomputing the basis,
+   measured the toolkit basis's error, not the recomputed one's.
 
    **Decided (16 October 2026): fetched from SBCI_Toolkit when first needed.**
+   Superseded by PORTING.md item 42: `smooth()` no longer fetches the basis;
+   `sbci basis` still fetches the toolkit's files, for comparisons with the
+   MATLAB, and `find_basis` checks their SHA-256.
    Bundling it would add about 100 MB to a wheel whose other data is about
    2.8 MB. The two files are public in the SBCI group's SBCI_Toolkit on
    GitHub, so `sbci.download.fetch_basis` reads them there at one commit,
@@ -215,11 +222,12 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    (on a cluster, on a login node). With no network, `.smooth()` says why the
    fetch failed and where it looked (PORTING.md item 31).
 
-   **Verified.** `ContinuousConnectome.smooth(kernel="rdk")` reproduces
+   **Verified** (on the MATLAB's own basis, the column scaling taken back out in
+   the test). `ContinuousConnectome.smooth(kernel="rdk")` reproduces
    MATLAB's `reference_density.mat` to **3.14 float32-eps**, correlation
    0.99999999999994, with the diagonal exactly zero and unit mass
-   1.000000000014. The bandwidth a user gets by passing nothing is the one the
-   reference run used, to 5.0e-08. `tests/test_matlab_reference.py` holds both
+   1.000000000014. `kappa_candidates()[3]` gives the reference run's bandwidth,
+   to 5.0e-08; `smooth()`'s default is now `DEFAULT_KAPPA`. `tests/test_matlab_reference.py` holds both
    within 10 float32-eps, and `tests/reference/smooth_matlab_probe.py` prints
    them (PORTING.md item 24).
 
@@ -239,10 +247,10 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    metadata must say so -- `normalization: "unit-mass"` already does.
 
 10. ~~**Which smoother do the released cohorts use?**~~ **DECIDED: ship both,
-    with the spherical heat kernel as the default.**
+    with the spherical kernel as the default.**
 
     The two are not a mismatch; they are two methods from two papers. The
-    **spherical heat kernel** (Moyer et al., *A Continuous Model of Cortical
+    **spherical kernel** (Moyer et al., *A Continuous Model of Cortical
     Connectivity*, MICCAI 2016; code at `dcmoyer/concon`) inflates the cortical
     surface to a sphere and smooths with a truncated spherical-harmonic kernel
     that is not the heat kernel, despite the name: weight
@@ -269,6 +277,15 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     - the Riemannian kernel was run at each of its ten candidate bandwidths;
     - r is over the 10,972,270 cortical vertex pairs, and over the Schaefer-200
       masses.
+
+    **These were measured with the SBCI_Toolkit's basis**, which is not
+    orthonormal on the grid: at its default bandwidth a third of the Riemannian
+    kernel's weight was negative and half lay beyond 20 degrees, and a streamline
+    end's regional mass ran 0.67 to 1.42 of its share. The package now builds the
+    grid's own basis and scales each kernel column to unit mass (PORTING.md item
+    42), so this table, the 0.68 and 0.92 and the peak at 6.07 describe the old
+    kernel and must be measured again on the tutorial subject. The default kappa
+    is now 5.5 mm.
 
     These numbers were measured on 17 October 2026 (job 5477553, `r8_quick.py`
     in `/work/users/x/y/xya/paper-open-items/`):
@@ -311,7 +328,7 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     been smoothed into near-uniformity.
 
     **The decision:** both ship, the kernel used is recorded in the metadata,
-    and the spherical heat kernel is the default. Consequences:
+    and the spherical kernel is the default. Consequences:
 
     - Released cohorts stay canonical; nothing is reprocessed.
     - `smooth()` defaults to `kernel="shk"`. `shk` means the **spherical heat
@@ -321,14 +338,14 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
       (`sbci cohort`) refuses a cohort whose files mix kernels or bandwidths.
     - The two kernels take different bandwidth parameters: the spherical kernel
       takes `sigma` (0.005 in the released files) and the Riemannian kernel
-      takes `kappa` (about 1.95). `bandwidth` alone is therefore ambiguous in
+      takes `kappa`, in mm (5.5 by default). `bandwidth` alone is therefore ambiguous in
       the metadata and must be read together with `kernel`.
 
     **Naming correction -- applied.** The brief's API specifies
     `smooth(kernel="rdk" or "shk")`. `shk` had been implemented as the *Matern*
     kernel, because `compute_matern_kernel_matrix.m` is what the toolkit ships.
     Under this decision `sbci.smoothing.KERNELS` is now
-    `("shk", "rdk", "matern")`: `shk` is the spherical heat kernel and is the
+    `("shk", "rdk", "matern")`: `shk` is the spherical kernel and is the
     default, and the Matern kernel is `matern`. The spherical kernel is shipped
     and is the default: it reproduces `c3_main` at r = 1.00000000 and scale
     1.000000 on all 803,741 streamlines of the tutorial subject, once the grid's

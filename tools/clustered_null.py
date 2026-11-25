@@ -44,7 +44,10 @@ def main(argv=None):
             score = SHARED * rng.standard_normal((n_families, 1))[groups]
             score += rng.standard_normal((groups.size, 1))
             naive[i] = local_test(score, covariate, method="none").pvalue[0]
-            clustered[i] = local_test(score, covariate, method="none", groups=groups).pvalue[0]
+            # CR1, as PORTING.md item 5 records it; groups= defaults to CR2 since item 42
+            clustered[i] = local_test(
+                score, covariate, method="none", groups=groups, vcov="CR1"
+            ).pvalue[0]
         print(
             f"{n_families:>8}  {np.mean(naive < 0.05):>6.3f}  {np.mean(clustered < 0.05):>9.3f}",
             flush=True,

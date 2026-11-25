@@ -92,7 +92,10 @@ the measures here and the tractography behind them change with it, so it
 belongs in any comparison of women and men. The young adults are not
 independent: the 946 come from 423 families of twins and siblings, and a test
 that counts them as independent makes every p-value too small. `groups=` treats the families as
-clusters. Family membership is in the HCP's restricted table, which has its
+clusters. These tests were computed with the plain cluster-robust sandwich on
+`G - 1` degrees of freedom (`vcov="CR1"`); `groups=`'s default is now CR2 on the
+hypothesis's own degrees of freedom (PORTING.md item 42), and these numbers have not
+yet been recomputed with it. Family membership is in the HCP's restricted table, which has its
 own data use agreement: it is read at analysis time, and only counts drawn
 from it appear here, with no subject named beside them.
 
@@ -116,9 +119,9 @@ count = np.array([sbci.load(p).metadata["streamline_count"] for p in paths]) / 1
 volume = ...   # per subject: EstimatedTotalIntraCranialVol from T1w/<id>/stats/aseg.stats (litres)
 design = np.column_stack([score, female, band, count, volume])   # local_test adds the intercept
 groups = [family[s] for s in subjects]
-trait = sbci.local_test(reduction.scores, design, terms=[1], groups=groups)   # fluid intelligence
+trait = sbci.local_test(reduction.scores, design, terms=[1], groups=groups, vcov="CR1")   # fluid intelligence
 trait.significant()                                       # the components that survive: none
-sex = sbci.local_test(reduction.scores, design, terms=[2], groups=groups)     # sex, the trait as nuisance
+sex = sbci.local_test(reduction.scores, design, terms=[2], groups=groups, vcov="CR1")     # sex, the trait as nuisance
 effect = sex.effect_map(reduction, alpha=0.05)            # one value per vertex, surviving components only
 sbci.load(paths[0]).plot(effect, mesh="fsaverage", engine="pyvista")
 ```
@@ -231,7 +234,7 @@ for i, s in enumerate(subjects):
 maps = np.array(maps)
 cortex = ~np.isnan(maps).any(axis=0)                          # NaN on the medial wall
 covariates = np.column_stack([female, score, band, count, motion, volume])[kept]
-sex = sbci.local_test(maps[:, cortex], covariates, terms=[1], groups=np.array(groups)[kept])
+sex = sbci.local_test(maps[:, cortex], covariates, terms=[1], groups=np.array(groups)[kept], vcov="CR1")
 sex.significant()                                             # vertices, here
 ```
 

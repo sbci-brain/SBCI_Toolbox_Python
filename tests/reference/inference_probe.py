@@ -44,6 +44,9 @@ import sbci
 from sbci.stats import design, local_test
 
 BANDS = {23.5: "22-25", 28.0: "26-30", 33.0: "31-35", 37.0: "36+"}
+# The recorded numbers used the plain cluster-robust sandwich on G - 1 degrees of freedom;
+# local_test's default with groups= is now CR2. Set VCOV to "CR2" to run with the default.
+VCOV = "CR1"
 
 
 def main() -> int:
@@ -98,12 +101,13 @@ def main() -> int:
     print("design:", ", ".join(named.names))
 
     print("1. Sex, with the rest as nuisance and families as clusters, on the 20 components")
-    sex = local_test(fit["scores"], named, terms=["female"], groups=groups)
+    sex = local_test(fit["scores"], named, terms=["female"], groups=groups, vcov=VCOV)
     old = local_test(
         fit["scores"],
         np.column_stack([fit["trait"], fit["female"], fit["band"], fit["count"], *extra]),
         terms=[2],
         groups=groups,
+        vcov=VCOV,
     )
     identical = np.array_equal(sex.statistic, old.statistic) and np.array_equal(
         sex.adjusted, old.adjusted
@@ -130,13 +134,17 @@ def main() -> int:
     print("   subjects per band:", ", ".join(f"{band} {count}" for band, count in sizes.items()))
     factor = design(banded, reference={"age_band": "22-25"})
     print("   design:", ", ".join(factor.names))
-    whole = local_test(fit["scores"], factor, terms=["age_band"], groups=groups)
+    whole = local_test(fit["scores"], factor, terms=["age_band"], groups=groups, vcov=VCOV)
     print(
         f"   the whole factor, {whole.numerator_dof} degrees of freedom: "
         f"{whole.significant().size} of 20 components"
     )
     oldest = local_test(
-        fit["scores"], factor, contrast={"age_band[31-35]": 1, "age_band[26-30]": -1}, groups=groups
+        fit["scores"],
+        factor,
+        contrast={"age_band[31-35]": 1, "age_band[26-30]": -1},
+        groups=groups,
+        vcov=VCOV,
     )
     k = int(np.nanargmin(oldest.adjusted))
     low, high = oldest.interval(0.95)
@@ -148,13 +156,15 @@ def main() -> int:
 
     print("3. Vertex by vertex, on each subject's vertex strength")
     for term, published in (("female", 1020), ("fluid_intelligence", 113)):
-        alone = local_test(strength, design({term: covariates[term]}), terms=[term], groups=groups)
+        alone = local_test(
+            strength, design({term: covariates[term]}), terms=[term], groups=groups, vcov=VCOV
+        )
         tested = int(np.isfinite(alone.pvalue).sum())
         print(
             f"   {term} alone, as tools/age_probe.py tests it: {alone.significant().size} of "
             f"{tested} cortical vertices at FDR 0.05 (published: {published})"
         )
-    adjusted = local_test(strength, named, terms=["female"], groups=groups)
+    adjusted = local_test(strength, named, terms=["female"], groups=groups, vcov=VCOV)
     print(
         f"   female with the other {len(covariates) - 1} as nuisance: "
         f"{adjusted.significant().size} vertices; "
@@ -168,7 +178,7 @@ def main() -> int:
     print(f"   wrote the map and the table to {out}")
 
     print("4. One subject per family: fluid intelligence given the rest, as independent subjects")
-    trait = local_test(fit["scores"], named, terms=["fluid_intelligence"], groups=groups)
+    trait = local_test(fit["scores"], named, terms=["fluid_intelligence"], groups=groups, vcov=VCOV)
     print(f"   all {len(subjects)}, families as clusters: component 13 at {trait.adjusted[12]:.3f}")
     plain = np.column_stack([fit["trait"], fit["female"], fit["band"], fit["count"], *extra])
     for seed in range(5):

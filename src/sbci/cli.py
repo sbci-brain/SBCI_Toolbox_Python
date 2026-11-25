@@ -69,13 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     basis = subparsers.add_parser(
         "basis",
-        help="fetch the Laplace-Beltrami basis the rdk and matern kernels need, 100 MB, once; "
-        "smooth() fetches it too, where the network can be reached",
+        help="fetch the SBCI_Toolkit's Laplace-Beltrami basis, 100 MB, for comparisons with "
+        "the MATLAB; smooth() does not need it",
     )
     basis.add_argument(
         "--out",
-        help="where to put it (default: $SBCI_LBO_DIR, else ~/.cache/sbci/lbo, where smooth() "
-        "looks)",
+        help="where to put it (default: $SBCI_LBO_DIR, else ~/.cache/sbci/lbo, where "
+        "find_basis() looks)",
     )
     basis.add_argument("--force", action="store_true", help="fetch it again even if present")
 
@@ -386,7 +386,10 @@ def _command(argv: Sequence[str] | None = None) -> int:
             return 1
         print(f"the Laplace-Beltrami basis is in {where}")
         if args.out is not None and Path(args.out).resolve() != download.basis_dir().resolve():
-            print(f"  smooth() looks elsewhere: point SBCI_LBO_DIR at {where}, or pass eigenpairs=")
+            print(
+                f"  find_basis() looks elsewhere: point SBCI_LBO_DIR at {where}, "
+                "or pass eigenpairs="
+            )
         return 0
 
     if args.command == "convert":

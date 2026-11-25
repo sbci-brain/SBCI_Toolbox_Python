@@ -22,8 +22,9 @@ from sbci.metadata import template
 def _no_basis_from_github(monkeypatch):
     """No test fetches the 100 MB Laplace-Beltrami basis; the fetch's own tests serve theirs.
 
-    ``smooth(kernel="rdk")`` fetches the basis when it finds none, so a test that reached it
-    without a basis would download it in CI without a word. It fails here instead.
+    ``smooth()`` builds the grid's own basis and never fetches; a test that called
+    :func:`sbci.download.fetch_basis` by mistake would download 100 MB in CI without a word.
+    It fails here instead.
     """
     from sbci import download
 

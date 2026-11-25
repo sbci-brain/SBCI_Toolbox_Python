@@ -25,11 +25,9 @@ their SC and FC (about 1 GB), `--subject` any one of the 946, and `--all`
 every one. The examples read the files that command writes into `./hcp-ya`;
 the few paths under `/work`, `/overflow` and `/proj` are the lab's copies, on
 the Longleaf cluster, of what is not public (the HCP's own scans, the
-pipeline's output), so substitute yours. The `rdk` and `matern` kernels need the
-Laplace-Beltrami basis, two files (`EV_LBO_ds_ico4_{L,R}.mat`) from
-[SBCI_Toolkit](https://github.com/sbci-brain/SBCI_Toolkit)'s `concon_estimate`,
-which `smooth()` fetches the first time (*Storing endpoints, and re-smoothing
-from them*).
+pipeline's output), so substitute yours. The `rdk` and `matern` kernels build
+the grid's Laplace-Beltrami basis from the bundled white surface, so they need
+nothing downloaded (*Storing endpoints, and re-smoothing from them*).
 
 ## Setup on Longleaf
 
@@ -548,6 +546,12 @@ density = smooth_endpoints(Endpoints.from_matlab(
 Verified against a MATLAB reference run to single-precision rounding, which is
 all the reference itself carries. Takes 4.4 s for both hemispheres.
 
+This is the MATLAB's computation on the MATLAB's basis, which is not
+orthonormal on the grid: at this bandwidth about a third of the kernel's weight
+is negative and half lies beyond 20 degrees. `smooth(kernel="rdk")` builds the
+grid's own basis instead (`sbci.smoothing.laplace_beltrami_basis`) and scales
+each kernel column to unit mass (`sbci.smoothing.kernel_matrices`).
+
 ![The spherical kernel at two bandwidths](docs/figures/spherical_kernel.png)
 
 *The kernel `smooth(kernel="shk")` applies, relative to its peak, at the
@@ -604,13 +608,15 @@ back.has_endpoints                      # True
 back.endpoints.n_streamlines            # 803741
 back.endpoints.has_positions            # True: barycentric positions too
 
-resmoothed = back.smooth(kernel="rdk")  # the first time on a machine, it fetches the basis
+resmoothed = back.smooth(kernel="rdk")  # builds the grid's basis, once a session
 resmoothed.metadata["kernel"]           # 'rdk'
-resmoothed.metadata["bandwidth"]        # 1.948262, from the reference formula
+resmoothed.metadata["bandwidth"]        # 5.5 (mm), where rdk smooths at shk's scale
 ```
 
-Six seconds on a login node, and the first time about as long again to fetch
-the basis. The result is a new `ContinuousConnectome` normalized to unit mass,
+Six seconds on a login node with the toolkit's basis, measured before item 42
+of PORTING.md; the first `rdk` or `matern` smoothing of a session also builds
+the grid's basis, 10 to 24 s for both hemispheres on one core of a Mac. The
+result is a new `ContinuousConnectome` normalized to unit mass,
 carrying the same endpoints, so it can be re-smoothed again at a different
 bandwidth.
 
@@ -619,40 +625,32 @@ reference script's value; it names 1, 2 and 3). The result records it as
 `nu`, and `sbci.load_cohort` tells Matern files at different `nu` apart,
 reading one written before `nu` was recorded as 3.
 
-**The Laplace-Beltrami basis** is `EV_LBO_ds_ico4_L.mat` and
-`EV_LBO_ds_ico4_R.mat`, 50 MB per hemisphere, from the SBCI group's
-[SBCI_Toolkit](https://github.com/sbci-brain/SBCI_Toolkit). The first `rdk` or
-`matern` smoothing on a machine fetches them into `~/.cache/sbci/lbo` (or
-`$SBCI_LBO_DIR`), at the commit the comparisons with MATLAB were run with and
-checked against their SHA-256, and says so. `sbci basis` fetches them ahead of
-time; on a cluster whose compute nodes cannot reach the network, run it on a
-login node:
+**The Laplace-Beltrami basis** is built on the grid itself: the cotangent
+Laplacian of the bundled ico4 white surface (fsaverage's white surface averaged
+over each grid vertex), on its intrinsic Delaunay triangulation, with its lumped
+vertex areas, solved in full (2,562 modes a hemisphere) and orthonormal under
+those areas. `sbci.smoothing.laplace_beltrami_basis("L")` returns it. Building it
+takes under half a minute for both hemispheres on one core, once a session;
+nothing is downloaded.
 
-```bash
-sbci basis                               # into ~/.cache/sbci/lbo, where .smooth() looks
-```
+The SBCI_Toolkit's `EV_LBO_ds_ico4_{L,R}.mat`, which the MATLAB used, are the
+first 2,562 eigenvectors of fsaverage's white surface at ico6, sampled at the ico4
+vertices and given unit Euclidean length: not orthonormal on the grid, so the
+kernel they make is signed and non-local. `sbci basis` still fetches them,
+`find_basis()` finds them (checking their SHA-256), and `eigenpairs=` takes their
+folder, for comparisons with the MATLAB; `smooth()` warns that the kernel they
+make is signed.
 
-A copy of your own works as well: pass its directory as `eigenpairs=`, or set it
-once and forget it:
-
-```bash
-export SBCI_LBO_DIR=$PWD/SBCI_Toolkit/concon_estimate
-```
-
-`.smooth()` looks in `$SBCI_LBO_DIR`, `$SBCI_TOOLKIT/concon_estimate`,
-`~/.cache/sbci/lbo` and `~/.sbci/lbo`; finding nothing, it fetches the basis,
-and if that fails it says why and names every place it looked. The files
-describe the grid rather than the subject, so they are neither bundled in the
-wheel nor duplicated into every file. Recomputing them from the bundled white
-surface was tried and is not good enough -- it reproduces the reference kernel
-only to r = 0.94.
-
-**Is it correct?** `smooth(kernel="rdk")` reproduces MATLAB's
-`reference_density.mat` to **3.14 float32-eps**, correlation
-0.99999999999994, and the bandwidth you get by passing nothing is the one the
-reference run used to within 5.0e-08. `tests/test_matlab_reference.py` holds
-both within 10 float32-eps; `tests/reference/smooth_matlab_probe.py` prints
-them (PORTING.md item 24).
+**Is it correct?** On the MATLAB's own basis, with the step that corrects it
+taken back out (the column scaling), `smooth(kernel="rdk")` reproduced MATLAB's
+`reference_density.mat` to **3.14 float32-eps**, correlation 0.99999999999994,
+and `kappa_candidates()` picks the MATLAB's bandwidth to within 5.0e-08 (PORTING.md
+item 24). `tests/test_matlab_reference.py` puts the MATLAB's basis and step back
+itself and holds both within 10 float32-eps; those figures predate item 42 of
+PORTING.md, and re-running Tier 4 gives today's. The default bandwidth is no
+longer the MATLAB's: `DEFAULT_KAPPA`, 5.5 mm for rdk and 5.2 mm for matern, where
+each kernel averages over as many vertices as shk does at 0.005 (K_eff 306 and
+299 against 302.7).
 
 `kernel="shk"`, the default, reproduces `c3_main` at **r = 1.000000** at full
 scale on the tutorial subject, with the scale factor at 1.000000 and nothing fitted
@@ -667,8 +665,9 @@ support at about `2.9*sqrt(sigma)` radians. The amplitude offset the closed
 form carries, 0.14%, is the binary's lookup-table quantization, and the tables
 are now reproduced; what remains, 6e-6 relative, is the binary's single-precision
 read of its positions and its harmonics library's six-digit constants, with which
-put back the two agree to machine precision (PORTING.md item 6). A full subject takes about a
-minute. See PORTING.md item 6.
+put back the two agree to machine precision (PORTING.md item 6). On one core of a Mac,
+`smooth()` of a synthetic subject of 800,000 streamlines took 9 to 25 s and about 1.1 GB
+at its peak; PORTING.md item 6 has 15 s on Longleaf for the tutorial subject's 803,741.
 
 A re-smoothed density can carry mass on the medial wall, exactly as both
 references do, so `sbci validate` may flag a file saved straight from it --
@@ -852,12 +851,14 @@ sbci.local_test(reduction.scores, banded, groups=families,
 statistics bit for bit; docs/RESULTS.md reports what the test finds. Components
 are counted from 1 in these pages, as in docs/RESULTS.md and the figures; the
 code counts from 0, as `significant()` and `to_table()` do, so component 3 is
-column 2 of `reduction.scores`. A contrast against a level that holds few
-subjects -- the 36+ band holds 9 of the 943 -- leans on cluster-robust errors
-from a handful of clusters: better not read. The intervals agree with
-statsmodels' to 1e-9, cluster-robust ones included, as do a contrast's
+column 2 of `reduction.scores`. A level that holds few subjects -- the 36+ band
+holds 9 of the 943 -- gives a test on few degrees of freedom: in simulated
+cohorts of this shape about 6 for the 36+ band against another, which warns, and
+20 to 47 for the bands jointly. Merge 36+ into 31-35, or enter the band by its
+midpoint. The intervals agree with statsmodels' to 1e-9 (cluster-robust ones
+with `vcov="CR1"`) and with clubSandwich's (CR2) to 1e-10, as do a contrast's
 estimate and error, and the F tests of contrasts to 1e-8
-(`tests/test_stats_design.py`).
+(`tests/test_stats_design.py`, `tests/test_stats.py`).
 
 **Vertex by vertex.** The columns of `scores` need not be components. Given
 each subject's value at every vertex -- the strength of its connectivity, a
@@ -885,17 +886,23 @@ covariates in the model and without them.
 **Related subjects.** The test assumes the subjects are independent. Twins
 and siblings are not, and a cohort with families in it, such as the HCP Young
 Adults, gives p-values that are too small. With `groups=`, one label per
-subject (its family), the standard errors are cluster-robust -- the sandwich
-estimator with the usual small-sample factor, which allows any dependence
-inside a family -- and the F test takes its degrees of freedom from the number
-of families. It is the same test as statsmodels' `OLS(...).fit(cov_type="cluster")`
-and agrees with it to 1e-9. Families can be of any size, and a subject with
-no relative in the cohort is a family of one. The test needs hundreds of
-families, not dozens. In simulated cohorts with no association, families of
-one to four sharing both the covariate and the scores, a test at 0.05 that
-ignores the families rejects 16% to 17% of the time; with them as clusters
-it rejects 9.7% of the time with 20 families, 6.7% with 50, 6.0% with 100 and
-5.6% with 400 (`tools/clustered_null.py`).
+subject (its family), the standard errors are cluster-robust, which allows any
+dependence inside a family: by default Bell and McCaffrey's CR2, tested on the
+hypothesis's own degrees of freedom (Bell and McCaffrey's for one row,
+Pustejovsky and Tipton's HTZ test for several), as R's clubSandwich computes
+them, agreeing with it to 1e-10. Those degrees of freedom, `result.df`, follow how
+many families the tested covariate varies across: in simulated cohorts shaped
+like the 943, sex or a trait gets about 200 and the 36+ age band about 6. A test
+on fewer than 30 warns, and a covariate only one family carries is refused.
+Families can be of any size, and a subject with no relative in the cohort is a
+family of one. In simulated cohorts with no association, families of one to four
+sharing both the covariate and the scores, a test at 0.05 that ignores the
+families rejects 16% to 17% of the time; with them as clusters, 5.5% with 20
+families, 5.2% with 50 and 100, and 5.4% with 400. `vcov="CR1"`, the plain
+sandwich on `G - 1` degrees of freedom (statsmodels' `cov_type="cluster"` to
+1e-9, which docs/RESULTS.md used), rejects 9.7%, 6.7%, 6.0% and 5.6% there, and
+27% when only 3 of 400 families carry the covariate (`tools/clustered_null.py`;
+PORTING.md item 42).
 `permutations=` with `groups=` is refused: shuffling subjects between
 families of different make-up, twins against siblings, is not exchangeable.
 
@@ -1836,6 +1843,8 @@ The common cases:
 | --- | --- | --- |
 | `sc.smooth()` on a file with no `/endpoints` | `MissingDataError` | nothing to re-smooth from; the group is optional |
 | `sc.smooth()` on endpoints stored as vertices only | `MissingDataError` | `shk` needs where each streamline crossed, not the nearest vertex |
+| `fc.smooth()` | `ValueError`: only a structural connectome can be re-smoothed | a functional connectome has no streamlines |
+| `find_basis()` finding damaged toolkit files | `MissingDataError` naming them and `sbci basis --force` | their SHA-256 is not the pinned one |
 | `sbci download nonesuch` | exit status 1: `error: cohort must be one of ('hcp-ya',), got 'nonesuch'` | only the young adult cohort is released |
 | `sbci download hcp-ya` in a script, the terms not yet accepted on the machine | exit status 1: `error: these files come under the WU-Minn HCP Consortium Open Access Data Use Terms, which must be accepted once on this machine: ...` | the data come under the HCP's terms; run it once in a terminal, or add `--accept-terms` having read them |
 | `fetch_cohort(...)`, the terms not yet accepted | `sbci.download.TermsNotAccepted`, a `RuntimeError`, naming the terms and `accept_terms=True` | as above |

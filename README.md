@@ -81,11 +81,11 @@ vertex, relative to the strongest.*
 | Parcellate | `cc.to_atlas("Schaefer200")`, 44 atlases bundled | `parcellate_sc.m`, to float64 rounding |
 | Seed profile | `cc.seed(vertex=...)`, `cc.seed(region=...)` | the MATLAB seed rows, to float32 rounding (the file stores the connectome in float32) |
 | Structure-function coupling | `sc.coupling(fc, scope=...)`, three forms | the three MATLAB functions, to float64 rounding |
-| Smoothing | `cc.smooth(kernel="shk" \| "rdk" \| "matern")` from the stored endpoints; `rdk` and `matern` fetch the grid's Laplace-Beltrami basis, 100 MB, the first time | `concon` at r = 1.000000 at full scale, but for the south pole of each hemisphere, which it never writes; MATLAB to 3.14 float32-eps; the Matern closed form |
+| Smoothing | `cc.smooth(kernel="shk" \| "rdk" \| "matern")` from the stored endpoints; `rdk` and `matern` build the grid's own Laplace-Beltrami basis from the bundled white surface, nothing to download | `concon` at r = 1.000000 at full scale, but for the south pole of each hemisphere, which it never writes; MATLAB to 3.14 float32-eps on the MATLAB's own basis (before PORTING.md item 42); the Matern closed form |
 | Alignment | `sbci.align(subjects)` (ENCORE, on densities), `sbci.endpoints_align(subjects)` (ConSEAL, on endpoints), for `subjects = [sbci.load(p) for p in cohort.paths("sc")]`; `template=fixed` registers onto one subject; `device="gpu"` runs either on a CUDA GPU | the MATLAB references stage by stage, with the references' own errors put back for the comparison: ENCORE's geometry, template and composition to float64 rounding, what follows its reference's 1e-10 finite difference within that difference's own instability (5e-4 to 7e-4), ConSEAL to its reference's single precision; the references' shared errors are corrected and checked against closed forms (PORTING.md items 8, 9, 21 and 22); on a GPU, every step the CPU's to rounding and a registration within the CPU's own spread, about 12 times faster for ENCORE and 5 for ConSEAL on a V100 (PORTING.md items 26 and 36) |
 | Carrying a warp | `sbci.migrate_warp(warp, to="fs_LR_32k")` | an identity and a known rotation |
 | Reduction | `sbci.reduce(cohort.paths("sc"), rank=K)` (functional PCA, one file at a time); `sbci.project(fit, held_out)` scores new subjects on its basis | the MATLAB reference run to its fixed point, to 1e-15 on every component (at its default tolerance the first vector to 2.3e-16, since the port scores the vector it returns, PORTING.md item 17); `project` scores as the fit itself does, not by the reference's lower-triangle fit (PORTING.md items 8 and 21) |
-| Inference | `sbci.local_test(scores, design, groups=...)`, on components or per-vertex features; `sbci.stats.design(...)` for named covariates and factors, `terms=["site"]` and `contrast=` for the hypothesis; estimates with standard errors, intervals and partial R-squared | `scipy.stats` and statsmodels (no MATLAB reference exists), to 1e-9 |
+| Inference | `sbci.local_test(scores, design, groups=...)`, on components or per-vertex features; `sbci.stats.design(...)` for named covariates and factors, `terms=["site"]` and `contrast=` for the hypothesis; estimates with standard errors, intervals and partial R-squared | `scipy.stats`, statsmodels (`vcov="CR1"`) and R's clubSandwich (CR2, the `groups=` default); no MATLAB reference exists; to 1e-9 |
 | Test-retest | `sbci.stats.icc(sessions)`, ICC(2,1) or (3,1) for every feature; `sbci.stats.identification(first, second)`, connectome fingerprinting; `endpoints.take(...)` to split a subject's streamlines | Shrout and Fleiss's published example; `np.corrcoef` in float64 |
 | Figures | `cc.plot(values, mesh="fsaverage", engine="pyvista")` | drawn on FreeSurfer's fsaverage, shaded by sulcal depth |
 | Exchange | `cc.to_cifti(path)`: a 16.9 GB fsLR-32k dense connectome for Connectome Workbench | mass conserved to 1.1e-10; Workbench reads it |
@@ -189,6 +189,14 @@ The methods implemented here, and the paper each one ports:
 - **Riemannian diffusion kernel** — Wang, L., Li, D., & Zhang, Z. (2025). Riemannian
   diffusion kernel-smoothed continuous structural connectivity on cortical surface.
   *Imaging Neuroscience*, 3, IMAG.a.912. <https://doi.org/10.1162/imag.a.912>
+
+The statistics behind `groups=`:
+
+- **CR2 errors** — Bell, R. M., & McCaffrey, D. F. (2002). Bias reduction in standard errors
+  for linear regression with multi-stage samples. *Survey Methodology*, 28(2), 169–181.
+- **Their small-sample tests** — Pustejovsky, J. E., & Tipton, E. (2018). Small-sample methods
+  for cluster-robust variance estimation and hypothesis testing in fixed effects models.
+  *Journal of Business & Economic Statistics*, 36(4), 672–683.
 
 The data:
 

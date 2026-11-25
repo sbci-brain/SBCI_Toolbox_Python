@@ -754,6 +754,11 @@ class LazyCohort:
         return cc
 
 
+# The figures and captions were made with the plain cluster-robust sandwich on G - 1 degrees of
+# freedom; local_test's default with groups= is CR2 on Bell-McCaffrey degrees of freedom. VCOV
+# keeps the committed figures reproducible: set it to "CR2" to draw them with the default.
+VCOV = "CR1"
+
 BAND_MIDPOINTS = {"22-25": 23.5, "26-30": 28.0, "31-35": 33.0, "36+": 37.0}
 
 
@@ -945,12 +950,16 @@ def cohort_trait(
     given_sex = listed([short, "age band", "streamline count", *columns])
     design = np.column_stack([score, female, band, millions, *extra])
     sex_design = np.column_stack([female, score, band, millions, *extra])
-    result = sbci.local_test(reduction.scores, design, terms=[1], groups=family)
-    alone = sbci.local_test(reduction.scores, score, groups=family)
-    sexes = sbci.local_test(reduction.scores, sex_design, terms=[1], groups=family)
+    result = sbci.local_test(reduction.scores, design, terms=[1], groups=family, vcov=VCOV)
+    alone = sbci.local_test(reduction.scores, score, groups=family, vcov=VCOV)
+    sexes = sbci.local_test(reduction.scores, sex_design, terms=[1], groups=family, vcov=VCOV)
     if rank > 4:  # what a rank-4 fit, the first four of these components, would say
-        rank4 = sbci.local_test(reduction.scores[:, :4], design, terms=[1], groups=family)
-        rank4_sexes = sbci.local_test(reduction.scores[:, :4], sex_design, terms=[1], groups=family)
+        rank4 = sbci.local_test(
+            reduction.scores[:, :4], design, terms=[1], groups=family, vcov=VCOV
+        )
+        rank4_sexes = sbci.local_test(
+            reduction.scores[:, :4], sex_design, terms=[1], groups=family, vcov=VCOV
+        )
         print(
             f"  rank 4 (the first four, {reduction.explained[3]:.3f} of the norm): {trait} "
             f"significant {(rank4.significant() + 1).tolist()}, smallest adjusted p "
@@ -1256,8 +1265,8 @@ def cohort_coupling(
         ("sex", np.column_stack([female, score, band, millions, *extra]), "in women"),
     ):
         design = design[known]
-        result = sbci.local_test(values, design, terms=[1], groups=clusters)
-        whole = sbci.local_test(values.mean(axis=1), design, terms=[1], groups=clusters)
+        result = sbci.local_test(values, design, terms=[1], groups=clusters, vcov=VCOV)
+        whole = sbci.local_test(values.mean(axis=1), design, terms=[1], groups=clusters, vcov=VCOV)
         tests[name] = result
         hit = result.significant()
         strongest = int(np.nanargmin(result.pvalue))

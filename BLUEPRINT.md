@@ -25,7 +25,7 @@ discussion each, but everything written to disk depends on them.
 
 **Q10, which smoother the project standardizes on, has been decided:** both
 kernels ship, the choice is recorded in each file's metadata, and the spherical
-heat kernel is the default. Released cohorts therefore stay canonical and
+kernel is the default. Released cohorts therefore stay canonical and
 nothing is reprocessed. Annex A records the reasoning; section 7 records the
 work it creates.
 
@@ -184,7 +184,7 @@ under `/work/users/x/y/xya/`.
   in the pericalcarine, cuneus and lateral occipital cortex, lowest in the
   cingulate and entorhinal cortex (PORTING.md item 2)
 
-**Built since this section was first written:** the spherical heat kernel
+**Built since this section was first written:** the spherical kernel `concon` applies
 (PORTING.md item 6, r = 1.000000 at full scale, but for the south pole of each
 hemisphere, which the binary never writes), FPCA (item 5), ENCORE (item 4),
 ConSEAL (item 7), and the subject download, `sbci download hcp-ya`, which
@@ -430,9 +430,8 @@ rather than in a sibling: a connectome and the streamlines it was built from
 then cannot be separated or versioned apart. On sub-100307 they add 22.2 MB
 to a 28.0 MB file, and the group is optional so most users carry none.
 `.smooth()` works from them for all three kernels; `shk` needs nothing else,
-and the Laplace-Beltrami basis the other two need is 50 MB per hemisphere and
-is not bundled: the first smoothing that needs it fetches it from SBCI_Toolkit,
-at a pinned commit and checked (SPEC_QUESTIONS.md item 8).
+and the other two build the grid's Laplace-Beltrami basis from the bundled
+white surface (SPEC_QUESTIONS.md item 8; PORTING.md item 42).
 
 **Q11. No anatomical surface could be drawn.** — **Resolved.** The surfaces
 are rebuilt from fsaverage directly, as the mean position over each grid
@@ -452,10 +451,10 @@ SPEC_QUESTIONS.md item 11 carries the full table.
 ### Decided during preparation of this document
 
 **Q10. Which smoother does the project standardize on?** **Both ship, with the
-spherical heat kernel as the default and the choice recorded in metadata.**
+spherical kernel as the default and the choice recorded in metadata.**
 
 These are two methods from two papers, not an inconsistency. The **spherical
-heat kernel** (Moyer et al., *A Continuous Model of Cortical Connectivity*,
+kernel** (Moyer et al., *A Continuous Model of Cortical Connectivity*,
 MICCAI 2016) inflates the cortex to a sphere and smooths with a truncated
 spherical-harmonic kernel that is not the heat kernel, despite the name --
 weight `(2l+1)^(3/2)/sqrt(4 pi)`, compact support (PORTING.md item 6); it

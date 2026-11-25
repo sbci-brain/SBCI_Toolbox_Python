@@ -334,7 +334,7 @@ Expected agreement, and what to reject:
 | `to_atlas` | 1.9e-16, float64 rounding | worse than 1e-12 |
 | `seed` | float32 rounding | worse than 10 float32-eps |
 | `coupling` (3 forms) | 3.6 to 88.2 float64-eps | worse than 1e-12 |
-| `smooth` (rdk) | 3.14 float32-eps (`smooth_matlab_probe.py`) | worse than 10 float32-eps |
+| `smooth` (rdk), on the MATLAB's basis with the column scaling taken back out in the test | 3.14 float32-eps (`smooth_matlab_probe.py`, before PORTING.md item 42) | worse than 10 float32-eps |
 | `smooth` (shk) | r = 1.00000000, scale 1.000000 against `c3_main` run on the tutorial subject, the south pole it never writes emptied (`concon_fullscale.py`) | see PORTING.md item 6 |
 | `endpoints_align` (ConSEAL), the reference's errors put back | the single precision the MATLAB reference carries: kernel 4e-8, gradient 5.7e-7 (left) and 1.2e-6 (right), the six-iteration cost trace 3.5e-7, the template 2e-5 (`tests/reference/conseal_compare.py`) | see PORTING.md items 7 and 22 |
 | `reduce` | 1e-15 on every component at the reference's fixed point; at its default tolerance the first vector to 2e-16, with that vector's scores (item 11 below) | worse than 1e-12 |
@@ -475,10 +475,13 @@ discovery held in simulation, power rising with effect size), which establishes
 that the statistics are correctly *implemented*, not that they are the right
 statistics. **Ask whoever specified the API to confirm the intent.** For
 related subjects, `groups=` swaps in cluster-robust standard errors with the
-families as clusters, which agree with statsmodels to 1e-9 and come near the
-nominal false-positive rate in simulation with hundreds of families (5.6% at
-0.05 with 400), not with dozens (9.7% with 20; PORTING.md item 5, *Related
-subjects*, and item 33). docs/RESULTS.md shows
+families as clusters: by default CR2 on the hypothesis's own degrees of freedom,
+which agree with R's clubSandwich to 1e-10 and hold about 5% at 0.05 in
+simulation with 20 to 400 families (5.2% to 5.5%) and when 2 to 40 of 400
+families carry the covariate (2.6% to 5.4%); `vcov="CR1"` agrees with
+statsmodels to 1e-9 but needs the covariate in many families (9.7% with 20
+families, 5.6% with 400, 27% when 3 of 400 carry it; PORTING.md item 5,
+*Related subjects*, and items 33 and 42). docs/RESULTS.md shows
 what it changes on the 943 young adults; this page, which names subjects in its
 commands, quotes nothing a family table went into.
 

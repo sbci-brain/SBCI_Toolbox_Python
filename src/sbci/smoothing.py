@@ -107,10 +107,10 @@ DEFAULT_KAPPA = {"rdk": 5.5, "matern": 5.2}
 Each makes its kernel average over as many vertices as ``shk`` does at its
 default sigma of 0.005: an effective number of independent vertices,
 ``K_eff``, of 302.7 for ``shk`` over the cortex, against 306 for ``rdk`` at
-5.5 mm and 299 for ``matern`` at 5.2 mm. ``K_eff`` is the measure of the
-paper's Section 6.3: the cortex's weight over the mean weight one smoothed
-value averages over, ``(sum a w)^2 / sum a w^2``, with the file's vertex
-weights ``a``. The three default kernels thus smooth at one scale.
+5.5 mm and 299 for ``matern`` at 5.2 mm. ``K_eff`` is the cortex's weight
+over the mean weight one smoothed value averages over, ``(sum a w)^2 / sum
+a w^2``, with the file's vertex weights ``a`` and a kernel column's weights
+``w``. The three default kernels thus smooth at one scale.
 ``matern``'s matches at its default ``nu``, 3; another ``nu`` keeps the
 bandwidth and changes the scale.
 
