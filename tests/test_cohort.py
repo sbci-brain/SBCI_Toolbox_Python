@@ -1120,3 +1120,13 @@ def test_two_files_of_one_name_are_told_apart_by_their_folders(folder):
     assert load_cohort(root).excluded == {
         "sub-01": "2 sc files: visit-a/sub-01_sc.h5, visit-b/sub-01_sc.h5"
     }
+
+
+def test_files_of_one_format_are_made_alike_whatever_their_patch(folder):
+    """0.1.0-draft and 0.1.1 are one format, which the reader takes alike; they were refused."""
+    root, add = folder
+    for i in range(3):
+        add(f"sub-{i:02d}_sc.h5")
+    add("sub-03_sc.h5", _header(spec_version="0.1.1"))
+    cohort = load_cohort(root)
+    assert cohort.n_subjects == 4 and cohort.settings["sc"]["spec_version"] == "0.1"

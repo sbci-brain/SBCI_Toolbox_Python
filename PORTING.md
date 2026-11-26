@@ -5746,6 +5746,43 @@ it is applied here on its own; this item records them as they land.
   clustered tests re-run with CR2, which decides whether docs/RESULTS.md adopts it. On
   simulated cohorts of their shape, sex hardly moves and weak trait results drop by 13% to 20%.
 
+### The format's version and what the validator checks (M4: A1-01 to A1-04, with A1-05, A1-06 and A1-11), 25 November 2026
+
+- **The problem.** A file loaded only if its version's MAJOR.MINOR equalled `SPEC_VERSION`'s,
+  so freezing the format at 0.2.0 or 1.0.0 would have made every published 0.1.0-draft file
+  unreadable, while the float 0.1, "0.1.0-final" and "0.1.x.y" were accepted (A1-01). The
+  validator judged the mask and the areas only in aggregate, so uniform areas with the right
+  total, a mask calling a wall vertex cortex, or empty cortex called wall all passed (A1-03);
+  endpoint weights written on the wrong corners of the right triangle passed (A1-02); metadata
+  values went unchecked, a kernel "gaussian", a bandwidth of -1, a negative streamline count,
+  a key of the other modality (A1-04). An SC density labelled FC, or an SC file named `_fc`,
+  passed (A1-05); one NaN failed the mask check with a wrong message (A1-06); and a cohort
+  refused a 0.1.1 file beside 0.1.0-draft ones (A1-11).
+- **The fix.** A reader takes the formats in `spec.READABLE_VERSIONS`, `{"0.1"}`, whatever a
+  file's patch and tag, and a version must be MAJOR.MINOR.PATCH with `-draft` the only tag
+  (`metadata.format_of`); `SPEC_VERSION` is unchanged. `load` refuses metadata outside the
+  format's values: the mask and area conventions, each modality's normalization, no key of the
+  other modality, a kernel the package knows, a positive bandwidth, a whole streamline count.
+  `sbci validate` compares the mask and the areas with the grid's own, exactly; requires the
+  stored vertex to be its triangle's heaviest or nearest corner for at least 90% of the
+  endpoints; compares the `_sc`/`_fc` in a file's name with its metadata; asks an FC to reach
+  1e-3 in magnitude somewhere; and judges the mask on finite entries. The check named
+  "symmetry" is "storage" now; there are still thirteen. `load_cohort` compares versions as
+  the format they name.
+- **Checked.** Each spoiled file the review built passes on 9676a9b and fails here, and the
+  example SC and FC pass. On the release: its builders wrote the mask as
+  `load_atlas("aparc").labels != 0` and the areas from `mapping_avg_ico4.npz`, and with the
+  SBCI_Toolkit's copy of that mapping both equal the grid's own arrays bit for bit; the
+  deposit required exactly the metadata values the new rules allow of all 1,892 files (item
+  29). On real endpoints, the SBCI_Toolkit's example subject (383,760 streamlines, read from
+  its `mesh_intersections_ico4.mat`), a file smoothed and written by the package passes all
+  thirteen checks, its corner share 100% (heaviest 97.2%, nearest 100%), and copies spoiled
+  three ways fail the endpoints, area and mask checks. `sbci convert`'s and `import_legacy`'s
+  metadata are within the rules. With `SPEC_VERSION` set to 0.1.0 or 1.0.0 in a test, a
+  0.1.0-draft file loads, validates and joins a cohort.
+- **Still open, needing the data.** The review's checks 5 and 6: the new rules on the 946
+  released files themselves.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5788,7 +5825,7 @@ read all of it once more, an HCP id came out of this file, the binary's residual
 binary's, and the notebooks' choices flow through (item 41); and a review of 23 November
 2026 left a list of fixes, applied one at a time as they are decided, the pipeline's two
 commands first, then ConSEAL's rotation search, the install hints, the Riemannian and Matern
-kernels' basis and the family-clustered test (item 42). What is left: a version of the
+kernels' basis, the family-clustered test and the format's version and validator (item 42). What is left: a version of the
 dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
 *The history*); the components' sex result, which sits at the edge of the threshold (item

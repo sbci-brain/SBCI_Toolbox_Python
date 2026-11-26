@@ -234,8 +234,8 @@ class Metadata:
         carried = [key for key in others if self.fields.get(key) is not None]
         if carried:
             raise MetadataError(
-                f"an {modality.upper()} file carries {', '.join(carried)}, which belong to the "
-                "other modality: the metadata contradicts itself"
+                f"an {modality.upper()} file carries {', '.join(carried)}, of the other "
+                "modality: the metadata contradicts itself"
             )
         if modality != "sc":
             return

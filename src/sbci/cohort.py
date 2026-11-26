@@ -36,7 +36,8 @@ them: finite connectivity, unit mass, an empty medial wall, a mask of 0s and
 
 Then the files have to agree on how they were made: the keys in
 :data:`SETTINGS`, the kernel and bandwidth of SC among them, numbers compared
-as numbers. A cohort that mixes two ways is refused by default, naming who
+as numbers and the version as the format it names. A cohort that mixes two
+ways is refused by default, naming who
 differs; ``mismatch="exclude"`` keeps the subjects whose files share the most
 common way, every setting of every modality at once, and leaves the others out,
 and ``mismatch="report"`` keeps everyone and lists the differences.
@@ -73,6 +74,7 @@ import numpy as np
 
 from . import grid, spec
 from .errors import SbciError
+from .metadata import format_of
 
 SETTINGS: dict[str, tuple[str, ...]] = {
     "sc": (
@@ -101,7 +103,11 @@ SETTINGS: dict[str, tuple[str, ...]] = {
         "container_version",
     ),
 }
-"""Metadata keys every file of a modality must agree on: how the files were made."""
+"""Metadata keys every file of a modality must agree on: how the files were made.
+
+``spec_version`` is compared as the format it names, ``MAJOR.MINOR``
+(:func:`sbci.metadata.format_of`), as the reader takes it: ``0.1.0-draft`` and
+``0.1.1`` are one format, and :attr:`LoadedCohort.settings` gives ``0.1``."""
 
 SUBJECT_COLUMNS = ("subject", "participant_id", "Subject", "subject_id", "src_subject_id")
 """Column names taken for the subject id, the first present, unless one is named."""
@@ -636,7 +642,8 @@ class LoadedCohort:
     with ``NaN`` for missing where the column holds numbers, else strings with ``None``."""
     settings: dict
     """``{modality: {key: value}}``, the settings of :data:`SETTINGS` the files share (under
-    ``mismatch="report"``, a differing key holds the list of its values)."""
+    ``mismatch="report"``, a differing key holds the list of its values); ``spec_version``
+    is the format, ``MAJOR.MINOR``."""
     report: list
     """One dict per subject seen in the files or the tables: ``subject``, ``included``,
     ``reason``, each modality's file and session, the numbers worth a look, the
@@ -985,6 +992,8 @@ def load_cohort(
                 continue
             row.update(numbers_found)
             made[modality] = {key: fields.get(key) for key in SETTINGS[modality]}
+            # one format, however its version is written: what the reader takes alike
+            made[modality]["spec_version"] = format_of(made[modality]["spec_version"])
             if modality == "sc" and made["sc"]["kernel"] == "matern" and made["sc"]["nu"] is None:
                 made["sc"]["nu"] = 3.0  # made before nu was recorded, when 3 was the only one
         if len(made) == len(modalities):

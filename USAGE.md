@@ -191,7 +191,8 @@ validate`, the values among them, endpoint indices on the grid included. The
 files then have to
 agree on how they were made: the kernel, the bandwidth, the normalization, the
 nuisance model, the pipeline and container versions and the rest of
-`sbci.cohort.SETTINGS`, numbers compared as numbers. A cohort that mixes two
+`sbci.cohort.SETTINGS`, numbers compared as numbers and the version as its
+format (`0.1.0-draft` and `0.1.1` are one format, `0.1`). A cohort that mixes two
 ways is refused, naming who differs; `mismatch="exclude"` keeps the subjects
 made the most common way -- every setting of every modality together -- and
 leaves the rest out, and `mismatch="report"` keeps everyone. A subject's files
@@ -506,15 +507,22 @@ sbci validate sub-copy_sc.h5
 [PASS] metadata
 [PASS] grid
 [PASS] shapes
-[PASS] symmetry: storage_convention='upper-triangular-float32', stored dtype=float32
+[PASS] storage: storage_convention='upper-triangular-float32', stored dtype=float32
 [PASS] finite: 0 non-finite entries
 [PASS] nonnegativity: 0 negative entries
 [PASS] correlation: skipped: only FC holds correlations
-[PASS] area: sum 327684, expected about 327684
+[PASS] area: the grid's own vertex areas, sum 327684
 [PASS] unit mass: total mass 1
 [PASS] mask: medial wall carries 0 of the total
-[PASS] endpoints: every endpoint rebuilds within one edge (4.74 degrees) of its stored vertex, at most 2.70
+[PASS] endpoints: every endpoint rebuilds within one edge (4.74 degrees) of its stored vertex, at most 2.70; the stored vertex is its triangle's heaviest or nearest corner for ...
 ```
+
+The checks compare the mask and the areas with the grid's own, exactly, and require the
+stored vertex of at least 90% of the endpoints to be its triangle's heaviest or nearest
+corner, so weights written on the wrong corners fail. The tutorial subject's corner shares
+are not on record here; the SBCI_Toolkit's example subject scores 100.0% (heaviest 97.2%,
+nearest 100.0%). `load` refuses metadata outside the format's values (a kernel it does
+not know, a bandwidth that is not positive, a key of the other modality), naming the key.
 
 Exit status 0 means every check passed. `save()` validates before writing, so a
 run that forgot to record its bandwidth fails without leaving a partial file. A
@@ -1844,6 +1852,7 @@ The common cases:
 | `sc.smooth()` on a file with no `/endpoints` | `MissingDataError` | nothing to re-smooth from; the group is optional |
 | `sc.smooth()` on endpoints stored as vertices only | `MissingDataError` | `shk` needs where each streamline crossed, not the nearest vertex |
 | `fc.smooth()` | `ValueError`: only a structural connectome can be re-smoothed | a functional connectome has no streamlines |
+| `sbci.load(path)` with metadata outside the format's values | `MetadataError` naming the key | an unknown kernel, a bandwidth that is not positive, a key of the other modality, a version that is not MAJOR.MINOR.PATCH |
 | `find_basis()` finding damaged toolkit files | `MissingDataError` naming them and `sbci basis --force` | their SHA-256 is not the pinned one |
 | `sbci download nonesuch` | exit status 1: `error: cohort must be one of ('hcp-ya',), got 'nonesuch'` | only the young adult cohort is released |
 | `sbci download hcp-ya` in a script, the terms not yet accepted on the machine | exit status 1: `error: these files come under the WU-Minn HCP Consortium Open Access Data Use Terms, which must be accepted once on this machine: ...` | the data come under the HCP's terms; run it once in a terminal, or add `--accept-terms` having read them |

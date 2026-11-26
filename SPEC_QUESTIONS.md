@@ -3,6 +3,10 @@
 WP2 cannot freeze its file reader until these are answered. Each one is a place
 where `src/sbci/spec.py` currently carries a **provisional** value, marked
 `SPEC_VERSION = "0.1.0-draft"`. When this file is empty, the suffix comes off.
+A reader takes the formats in `READABLE_VERSIONS` (`0.1`), whatever a file's patch
+and tag, so taking the suffix off (`0.1.0`) leaves every published `0.1.0-draft`
+file readable as it is; a version must be MAJOR.MINOR.PATCH, with `-draft` the only
+tag (PORTING.md item 42).
 
 1. **HDF5 dataset names and layout.** The brief specifies "upper-triangular
    float32 array, plus datasets for area weights, mask, vertex coordinates, and
@@ -196,6 +200,12 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
      together or not at all. They give each endpoint's continuous position
      inside its triangle; without them an endpoint is known only to the nearest
      vertex, which moves it 1.5 degrees on average.
+   - **The corner rule.** The three weights belong to the three corners of the
+     canonical face, in its order, and the stored vertex is one of them: `sbci
+     validate` requires it to be the triangle's heaviest or nearest corner for at
+     least 90% of the endpoints. Every correct file measured scores 100% (the
+     heaviest corner alone, 97.2% to 100%); weights rolled one corner score 1% to
+     3% (PORTING.md item 42).
 
    FC files are refused endpoints: a field of correlations has no streamlines.
 
@@ -446,7 +456,9 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     toolkit's own example subject resolves at a median 1.62 degrees, and five
     of the lab's ADNI subjects resolve within the edge as well (PORTING.md
     item 39 says why their numbers are not given). Six subjects from two
-    pipeline sources, one face order -- it is canonical.
+    pipeline sources, one face order -- it is canonical. The corner order inside
+    a face is part of the convention too: weights rolled one corner still rebuild
+    within one edge, and only the corner rule (item 8) catches them.
 
     What is *not* in that order is the toolkit's
     `example_data/fsaverage_label/lh_grid_avg_ico4.vtk` export, nor its

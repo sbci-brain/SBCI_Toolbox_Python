@@ -518,7 +518,9 @@ run on the lab's ADNI subjects, whose numbers this page does not give
 one divergence that changes every published region matrix, the triangle
 convention of `parcellate_sc.m` (its diagonal convention was decided in
 October 2026: the mean over distinct vertex pairs). Files written before
-these are settled may need rewriting.
+these are settled may need rewriting. A freeze that keeps format `0.1`
+(`SPEC_VERSION = "0.1.0"`) leaves them readable as they are
+(`spec.READABLE_VERSIONS`).
 
 **The young adults' FC is built here, not by the pipeline.** The lab's copy
 of the cohort holds no pipeline FC, so the FC files of the eleven, and of the
