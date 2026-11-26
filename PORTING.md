@@ -5780,8 +5780,11 @@ it is applied here on its own; this item records them as they land.
   three ways fail the endpoints, area and mask checks. `sbci convert`'s and `import_legacy`'s
   metadata are within the rules. With `SPEC_VERSION` set to 0.1.0 or 1.0.0 in a test, a
   0.1.0-draft file loads, validates and joins a cohort.
-- **Still open, needing the data.** The review's checks 5 and 6: the new rules on the 946
-  released files themselves.
+- **On the release, 26 November 2026.** The review's checks 5 and 6: every one of the 1,892
+  released files, fetched one subject at a time and deleted once checked, loads and passes all
+  thirteen checks, with the grid's own mask and areas, nothing on the medial wall, and in every
+  SC file the stored vertex its triangle's heaviest corner for 100.0% of the endpoints (the
+  nearest for 97.1% to 97.5%), each rebuilt position within 2.73 degrees of it.
 
 ### The medial wall masked by default (M6, C1-16), 26 November 2026
 
