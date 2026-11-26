@@ -473,7 +473,8 @@ tag (PORTING.md item 42).
     would be silently wrong in exactly the way this package was.
 
 
-14. **Must a re-smoothed file carry nothing on the medial wall?** **Conflict.**
+14. **Must a re-smoothed file carry nothing on the medial wall?** **Decided: `smooth()`
+    masks by default** (PORTING.md item 42).
 
     The format says the medial wall carries no connectivity, and `sbci validate`
     enforces it. Neither reference produces such a file:
@@ -484,18 +485,16 @@ tag (PORTING.md item 42).
     | MATLAB's `reference_density.mat` (rdk) | present |
 
     Streamlines really do terminate near the wall, and neither smoother discards
-    them, so a density re-smoothed from stored endpoints inherits that mass and
-    fails the validator -- even though it reproduces the reference exactly.
+    them, so a density smoothed from stored endpoints as they smooth it inherits that
+    mass and fails the validator -- even though it reproduces the reference exactly.
 
-    `smooth()` therefore does **not** mask. Zeroing the wall inside it would break
-    `test_smooth_method_matches_matlab`, which holds the rdk port within 10
-    float32-eps of MATLAB (3.14 measured), and would make the shk port diverge from `c3_main` too. Fidelity
-    to the reference was judged worth more than the convenience of an output that
-    validates unaided.
-
-    **What WP1 owes:** a decision on where masking belongs. The options are to
-    apply it on write (which makes a saved file diverge from what was computed),
-    to apply it at import from the legacy `.mat` (where `tools/import_legacy.py`
-    already could), or to relax the validator for re-smoothed files. Until then,
-    `smooth(..., mask_medial_wall=True)` is the caller's explicit way to take the
-    format's side; the default stays faithful to the references.
+    `smooth()` masks by default since PORTING.md item 42, as every released file was
+    made (`tools/build_hcp_cohort.py` passes `mask_medial_wall=True`), so what it
+    returns validates, and the synthetic example, smoothed the same way, comes back bit
+    for bit. Fidelity to the references is kept where it is measured, in the tests
+    rather than in the package's default: the comparison with the MATLAB
+    (`test_smooth_method_matches_matlab`) passes `mask_medial_wall=False`, the
+    references' own behaviour, and those with `c3_main` compare the cortex or call
+    `endpoint_density`, which does not mask. Until item 42 the default was `False`,
+    faithful to the references, and a re-smoothed file failed the validator unless the
+    caller asked for the mask.

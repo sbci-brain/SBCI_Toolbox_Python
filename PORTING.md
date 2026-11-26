@@ -1046,8 +1046,8 @@ well, so these streamlines end on the medial wall of the subject's surface, and
 the registration is not the cause: it sits 11 to 20 degrees from the native
 sphere, as in every other subject checked. The mask zeroes the wall's rows and
 columns, so those endpoints keep only what their kernels put on cortex nearby --
-12% of a wall endpoint's mass on average with shk at 0.005 -- and the subjects
-stay in the analysis. Their connectomes correlate with the
+with shk at 0.005, about a third of an end's mass at the wall's edge, and almost
+none deep inside it -- and the subjects stay in the analysis. Their connectomes correlate with the
 example mean at 0.77 to 0.83, against 0.79 to 0.84 for twelve others drawn at
 random.
 
@@ -5783,6 +5783,35 @@ it is applied here on its own; this item records them as they land.
 - **Still open, needing the data.** The review's checks 5 and 6: the new rules on the 946
   released files themselves.
 
+### The medial wall masked by default (M6, C1-16), 26 November 2026
+
+- **The problem.** The format requires a file to carry nothing on the medial wall, and every
+  released file was smoothed with the wall masked (`tools/build_hcp_cohort.py` passes
+  `mask_medial_wall=True`), but `smooth()` left what the kernel put there unless asked, as
+  both references do. Re-smoothed with the defaults, the synthetic example did not come back
+  (r 0.9974), and the file `save()` wrote from it failed `sbci validate`'s mask check
+  (SPEC_QUESTIONS.md item 14).
+- **The fix.** `mask_medial_wall` defaults to `True`, in `smooth()` and so in
+  `ContinuousConnectome.smooth()`: the wall's rows and columns are zeroed before the unit-mass
+  normalization. `False` keeps what the kernel put on the wall; the comparison with the MATLAB
+  passes it, and those with `c3_main` compare the cortex or call `endpoint_density`, which does
+  not mask. Every script, notebook and tool behind a published number already named the
+  option, so none of them changes. The documents said an end on the wall keeps 12% of its
+  mass on cortex on average; that is the mean over the wall's area, while the ends of a real
+  subject lie mostly at its edge, so they now say about a third at the edge and almost none
+  deep inside it.
+- **Checked.** The synthetic example re-smoothed with the defaults: before, r 0.9974 and the
+  mask check failed; after, the same bits, and all thirteen checks pass. Against the tree
+  before the fix, for shk, rdk and matern: `True` gives the same bits on both, and so does the
+  default now; `False` gives the same bits on both, and so did the default before; the
+  default failed the mask check alone before and passes all thirteen now. The share of an
+  end's shk mass on cortex at the 439 wall vertices, from the kernel and through
+  `endpoint_density` (within 6e-5 of each other): 0.35 on average at the 121 that touch the
+  cortex (0.16 to 0.65), 0.03 deeper in, 0.120 over the wall's area. On the SBCI_Toolkit's
+  example subject, 0.42% of the ends have a wall vertex, 77% of them at the edge, and they
+  keep 0.39 of their mass on average; with `False`, 1.16% of its density touches the wall.
+  The full suite: 1,601 passed, 76 skipped.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5825,7 +5854,8 @@ read all of it once more, an HCP id came out of this file, the binary's residual
 binary's, and the notebooks' choices flow through (item 41); and a review of 23 November
 2026 left a list of fixes, applied one at a time as they are decided, the pipeline's two
 commands first, then ConSEAL's rotation search, the install hints, the Riemannian and Matern
-kernels' basis, the family-clustered test and the format's version and validator (item 42). What is left: a version of the
+kernels' basis, the family-clustered test, the format's version and validator, and
+the medial wall masked by default (item 42). What is left: a version of the
 dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
 *The history*); the components' sex result, which sits at the edge of the threshold (item

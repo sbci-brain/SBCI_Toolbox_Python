@@ -2012,8 +2012,9 @@ def smooth(
         before the unit-mass normalization, so that the result satisfies the
         format's mask rule and ``sbci validate``, as every released file does
         -- SPEC_QUESTIONS.md item 14. It does not drop the streamlines that
-        end on the wall: their kernels still reach the cortex nearby, and with
-        ``shk`` an end on the wall keeps 12% of its mass there on average.
+        end on the wall: the part of their kernels that reaches the cortex
+        stays -- with ``shk`` at 0.005, about a third of an end's mass at the
+        wall's edge, and almost none deep inside it.
         ``False`` leaves what the kernel put on the wall, as both references
         do; such a connectome saves, but fails ``sbci validate``'s mask check.
     progress

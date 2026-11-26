@@ -677,11 +677,13 @@ put back the two agree to machine precision (PORTING.md item 6). On one core of 
 `smooth()` of a synthetic subject of 800,000 streamlines took 9 to 25 s and about 1.1 GB
 at its peak; PORTING.md item 6 has 15 s on Longleaf for the tutorial subject's 803,741.
 
-A re-smoothed density can carry mass on the medial wall, exactly as both
-references do, so `sbci validate` may flag a file saved straight from it --
-SPEC_QUESTIONS.md item 14. Pass `mask_medial_wall=True` to zero it first --
-a file saved that way passes all thirteen `sbci validate` checks, verified end to
-end on a real subject -- and `progress=lambda done, total: ...` to watch a run.
+`smooth()` zeroes the medial wall by default, as every released file was made, so
+a file saved straight from it passes all thirteen `sbci validate` checks
+(SPEC_QUESTIONS.md item 14). The mask does not drop the streamlines that end on
+the wall: the part of their kernels that reaches the cortex stays -- with `shk`
+at 0.005, about a third of an end's mass at the wall's edge, and almost none deep
+inside it. `mask_medial_wall=False` keeps what the kernel put on the wall, as both
+references do. `progress=lambda done, total: ...` watches a run.
 
 The kernel is evaluated the way `c3_main` evaluates it: through two
 truncation-indexed lookup tables (10^5 harmonic samples, 10^6 kernel samples),

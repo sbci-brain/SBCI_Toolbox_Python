@@ -337,9 +337,9 @@ nothing and prevents an awkward rename later.
 | 3/9 | Which normalization | WP1 owner | minutes |
 | 7 | Copyright holder for the licence | PI | minutes |
 | 13 | Which face list the stored triangle indices refer to (SPEC_QUESTIONS.md item 13: answered, to be written into the spec) | WP1 owner | minutes |
-| 14 | Whether a re-smoothed file must carry nothing on the medial wall (SPEC_QUESTIONS.md item 14) | WP1 owner | minutes |
+| ~~14~~ | ~~Whether a re-smoothed file must carry nothing on the medial wall~~ Decided: `smooth()` zeroes it by default (SPEC_QUESTIONS.md item 14) | — | — |
 
-Six of these are minutes of discussion; Q6 is answered. PORTING.md records
+Five of these are minutes of discussion; Q6 is answered and Q14 decided. PORTING.md records
 three divergences from the references that want WP1's sign-off as well --
 ENCORE's step tolerance `delta=1e-5` (item 4), where each FPCA component
 starts (item 5) and the triangle convention of parcellation (item 3; the
